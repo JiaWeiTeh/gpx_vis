@@ -72,7 +72,7 @@ class Track:
                 self._record()
         # simple file check.
         if len(self.x) == 0:
-            raise FileNotFoundError('No .gpx file found in given path or directory.')
+            raise FileNotFoundError('Could not process file.')
         
     def _record(self):
         """
@@ -451,3 +451,6 @@ class Track:
     @property
     def shouldiContinueCycling(self):
         return 'yes of course.'
+    
+    
+    
