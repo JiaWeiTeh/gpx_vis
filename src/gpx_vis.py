@@ -72,7 +72,7 @@ class Track:
                 self._record()
         # simple file check.
         if len(self.x) == 0:
-            raise FileNotFoundError('Could not process file.')
+            raise FileNotFoundError('No .gpx file found in given path or directory.')
         
     def _record(self):
         """
@@ -197,20 +197,26 @@ class Track:
         else:
             # record index from previous loop
             previous_idx = 0 
-            for ii, idx in enumerate(idx_list):
-                # start value
-                if ii == 0:
-                    track_list.append([0, idx+1])
-                    previous_idx = idx + 1
-                # end value
-                elif ii == (len(idx_list) - 1):
-                    # account for both cases in the last loop
-                    track_list.append([previous_idx + 1, idx + 1])
-                    track_list.append([idx + 1, len(self.name)])
-                # in-between values
-                else:
-                    track_list.append([previous_idx + 1, idx + 1])
-                    previous_idx = idx + 1
+            # corner case
+            if len(idx_list) == 1:
+                idx = idx_list[0]
+                track_list.append([0, idx+1])
+                track_list.append([idx+1, len(self.name)])
+            else:
+                for ii, idx in enumerate(idx_list):
+                    # start value
+                    if ii == 0:
+                        track_list.append([0, idx+1])
+                        previous_idx = idx + 1
+                    # end value
+                    elif ii == (len(idx_list) - 1):
+                        # account for both cases in the last loop
+                        track_list.append([previous_idx + 1, idx + 1])
+                        track_list.append([idx + 1, len(self.name)])
+                    # in-between values
+                    else:
+                        track_list.append([previous_idx + 1, idx + 1])
+                        previous_idx = idx + 1
             return track_list
 
     # =============================================================================
@@ -297,7 +303,6 @@ class Track:
         main_map = folium.Map(location = map_center)
         # specify border.
         main_map.fit_bounds([map_sw, map_ne])
-        
         
         # create group
         lineGroup = folium.FeatureGroup("Lines")
@@ -451,6 +456,3 @@ class Track:
     @property
     def shouldiContinueCycling(self):
         return 'yes of course.'
-    
-    
-    
