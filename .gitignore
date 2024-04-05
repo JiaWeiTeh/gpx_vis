@@ -6,6 +6,7 @@ __pycache__/
 
 # My files
 */*.icloud
+.DS_Store
 
 # C extensions
 *.so
