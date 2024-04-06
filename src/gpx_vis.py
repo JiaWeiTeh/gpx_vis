@@ -17,6 +17,7 @@ import gpxpy
 
 import os
 import math
+import branca
 import folium
 import numpy as np
 import pandas as pd
@@ -349,7 +350,9 @@ class Track:
         # add tooltip
         tooltip = self._addTooltip(self, selected_idx)
         # add to group
-        folium.PolyLine(track_coords,
+        folium.ColorLine(track_coords,
+                        colors = self.z[ii:jj],
+                        colormap = branca.colormap.linear.viridis.scale(min(self.z),max(self.z)),
                         tooltip = tooltip,
                         weight = 4,
                         ).add_to(group)
@@ -380,6 +383,7 @@ class Track:
                     }}
         # add
         folium.features.GeoJson(
+                color = 'transparent',
                 data = highlight_line['geometry'],
                 control=False,
                 tooltip = tooltip,
