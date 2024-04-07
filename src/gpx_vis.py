@@ -5,12 +5,7 @@ Created on Tue Apr 2 23:14:31 2024
 
 @author: Jia Wei Teh
 
-This script combines .gpx files in /data and overplots them onto a HTML file?
-
-Written as an extension based on gpxpy.
-
-The problem with other libraries is that they dont really have outputs i want,
-and are not very customisable. This hopefully solves the problem (a little).
+This script combines .gpx files in /data and overplots them onto a HTML file.
 """
 # main library
 import gpxpy
@@ -21,13 +16,12 @@ import branca
 import folium
 import numpy as np
 import pandas as pd
+import altair as alt
 import humanfriendly
-import cmasher as cmr
 import reverse_geocode
-import matplotlib.pyplot as plt
+from folium.plugins import MarkerCluster, MiniMap
 
 from vincenty import vincenty
-from matplotlib.ticker import (AutoMinorLocator, MultipleLocator)
 
 class Track:
     """
@@ -176,6 +170,7 @@ class Track:
             # update attribute
             setattr(unique_city_list[ii], 'frequency', counts)
         # return full list of cities, sorted by country then by name
+        print('Here are the cities you have been in.')
         return sorted(unique_city_list)
     
     # =============================================================================
@@ -224,61 +219,6 @@ class Track:
     # Plotting on graphs    
     # =============================================================================
 
-    def plt_tracks(self):
-        """
-        Creates a latitude-longitude plot with matplotlib, coloured by elevation.
-        """
-        # create subplot
-        fig, ax = plt.subplots(1, 1, figsize = (5, 5), dpi = 300)
-        # draw line
-        plt.scatter(self.x, self.y, c = self.z, cmap = cmr.rainforest,
-                    vmax = self._round2n(max(self.z), 3),  
-                    vmin = self._round2n(min(self.z), 3),
-                    s = 0.5,)
-        # colorbar
-        plt.colorbar(label = 'elevation (m)')
-                     
-        
-        # plot waypoints for each end and beginning of a track
-        idx_split_list = self.idx_trksplit(self)
-        for (i, j) in idx_split_list:
-            self.plt_waypoints(ax, self.x[i:j], self.y[i:j])
-            
-        # ticks
-        # 5 mini ticks between major ticks
-        xtick_n, ytick_n = 5, 5
-        xspan = max(self.x) - min(self.x)
-        yspan = max(self.y) - min(self.y)
-        # 5 ticks on each sides
-        xinterval = self._round2n(xspan/5, 2)
-        yinterval = self._round2n(yspan/5, 2)
-        ax.xaxis.set_major_locator(MultipleLocator(xinterval))
-        ax.xaxis.set_minor_locator(AutoMinorLocator(xtick_n))
-        ax.yaxis.set_major_locator(MultipleLocator(yinterval))
-        ax.yaxis.set_minor_locator(AutoMinorLocator(ytick_n))
-        ax.tick_params(axis='both', which = 'major', direction = 'in',length = 6, width = 1)
-        ax.tick_params(axis='both', which = 'minor', direction = 'in',length = 4, width = 1)
-        ax.yaxis.set_ticks_position('both')
-        ax.xaxis.set_ticks_position('both')
-
-        plt.show()
-
-    @staticmethod
-    def plt_waypoints(ax, x, y):
-        """
-        Adding mini waypoints to the plt_tracks() plot.
-        """
-        # A small trick to separate tracks without actually separating them: add waypoint at end and start of tracks
-        # start
-        ax.scatter(x[0], y[0], 
-                marker = '.', s = 100, 
-                alpha = 0.8,
-                fc = 'yellow', ec = 'k')
-        # finish
-        ax.scatter(x[-1], y[-1], 
-                marker = '^', s = 50, 
-                alpha = 0.8,
-                fc = 'blue', ec = 'k')
         
     @staticmethod
     def _round2n(x, n):
@@ -291,7 +231,7 @@ class Track:
     # Plotting on maps
     # =============================================================================
     
-    def create_map(self, filename):
+    def create_map(self, filename, lite = False, **kwargs):
         """
         Map out your tour on an interactive streetmaps.
         """
@@ -306,15 +246,17 @@ class Track:
         main_map.fit_bounds([map_sw, map_ne])
         
         # create group
-        lineGroup = folium.FeatureGroup("Lines")
-        
+        lineGroup = folium.FeatureGroup(name = "Your Routes")
         # plot waypoints for each end and beginning of a track
         idx_split_list = self.idx_trksplit(self)
         # if list is empty, there is no splitting tracks
         for selected_idx in idx_split_list:
-            self._addTracksOnMap(self, lineGroup, selected_idx)
+            self._addTracksOnMap(self, lineGroup, selected_idx, lite, **kwargs)
+            
+        # clusters
+        cluster = MarkerCluster().add_to(main_map)
         # add group to map
-        lineGroup.add_to(main_map)
+        lineGroup.add_to(cluster)
         
         # add different backgrounds
         _tilesList = ['openstreetmap', 'CartoDB Voyager', 'Cartodb dark_matter', 'cartodbpositron']
@@ -322,6 +264,11 @@ class Track:
             folium.TileLayer(tiles).add_to(main_map)
         # add layer control
         folium.LayerControl(position='bottomright').add_to(main_map)
+        # add minimap 
+        MiniMap(toggle_display = True, zoom_level_offset = -4,
+                witdh = 400, height = 200,
+                position = 'topright',
+                ).add_to(main_map)
         
         # save
         if not filename.endswith(".html"):
@@ -331,28 +278,45 @@ class Track:
         return print(f"File saved as {filename}.")
     
     @staticmethod
-    def _addTracksOnMap(self, group, selected_idx):
+    def _addTracksOnMap(self, group, selected_idx, lite, **kwargs):
         """
         This function adds individual tracks onto create_map().
         group: FeatureGroup this track belongs to.
         selected_idx: index range of this particular track.
         """
         ii, jj = selected_idx
-        track_coords = list(zip(self.y[ii:jj], self.x[ii:jj]))
+        # limit number of points shown to reduce lag, if lite is enabled.
+        if kwargs.get('nlite') is not None:
+            max_nPoints = kwargs.get('nlite')
+        else:
+            max_nPoints = 50
+        if (jj-ii) < max_nPoints or lite == False:
+            nPoints = 1 #basically means plot every single point
+        else:
+            nPoints = int((jj-ii)/max_nPoints)
+        
+            
+        track_coords = list(zip(self.y[ii:jj:nPoints], self.x[ii:jj:nPoints]))
         # popup str in html
         popupTxt = self._addPopuptxt(self, selected_idx)
         # information frame        
-        iframe = folium.IFrame(popupTxt)
+        # iframe = folium.IFrame(popupTxt)
+        elevation_graph = self._addPopupGraph(self, selected_idx)
         # create popup
-        popup = folium.Popup(iframe,
-                     min_width=300,
-                     max_width=300)
+        popup = folium.Popup(popupTxt,
+                     min_width=400,
+                     max_width=400)
+        elevation_graph.add_to(popup)
         # add tooltip
         tooltip = self._addTooltip(self, selected_idx)
         # add to group
+        # since elevation sometimes differ widly, perhaps it is better to use 
+        # log-scale as a simple fix. (as long as there aren't zero entries)
+        # Right now, I am using individual tracks for individual colorbar min/max. Can of course
+        # switch to map-wide colorbar by removing [ii:jj]
         folium.ColorLine(track_coords,
-                        colors = self.z[ii:jj],
-                        colormap = branca.colormap.linear.viridis.scale(min(self.z),max(self.z)),
+                        colors = self.z[ii:jj:nPoints],
+                        colormap = branca.colormap.linear.viridis.scale(min(self.z[ii:jj:nPoints]),max(self.z[ii:jj:nPoints])),
                         tooltip = tooltip,
                         weight = 4,
                         ).add_to(group)
@@ -381,21 +345,21 @@ class Track:
                     # reverse coord from (y, x) into (x,y)
                     'coordinates': [coord[::-1] for coord in track_coords]
                     }}
-        # add
+        # add transparent layer to help highlighting
         folium.features.GeoJson(
                 color = 'transparent',
                 data = highlight_line['geometry'],
                 control=False,
                 tooltip = tooltip,
+                weight = 25, #transparent layer easier to highlight
                 highlight_function=highlight_function, 
                 ).add_to(group)
-        
         return  
       
     @staticmethod
     def _addPopuptxt(self, selected_idx):
         """
-        Creates str-block that contains useful info about the route when clicked.
+        Creates str-block that contains useful info.
         """
         # index range
         ii, jj = selected_idx
@@ -410,18 +374,63 @@ class Track:
         dist = self._getDistance(track_y, track_x)
         timeElapsed = self._getTimeElapsed(track_t[0], track_t[-1])
         
-        # HTML fmt
+        # Option 1: As HTML fmt-ed block
         infostr = f"""
                     <h3>{track_name}</h3>
                     <h4> {startCity} - {endCity}</h4>
                     <p> 
-                    <b>Start</b>: <em>{track_t[0].strftime('%d.%m.%Y %H:%M:%S')}</em><br>
-                    <b>End</b>: <em>{track_t[-1].strftime('%d.%m.%Y %H:%M:%S')}</em><br>
+                    <b>Start</b>: <em>{track_t[0].strftime('%d.%m.%Y %H:%M:%S')} (UTC)</em><br>
+                    <b>End</b>: <em>{track_t[-1].strftime('%d.%m.%Y %H:%M:%S')} (UTC)</em><br>
                     <b>Dist</b>: {dist} km<br>
                     <b>Duration</b>: {timeElapsed}<br>
                     </p>
                   """
-        return infostr
+        # Option 2: Embedded in VegaLite graph.
+        title = f'{track_name}'
+        subtitle1 = f"""Start: {track_t[0].strftime('%d.%m.%Y %H:%M:%S')} (UTC), {startCity}"""
+        subtitle2 = f"""End: {track_t[-1].strftime('%d.%m.%Y %H:%M:%S')} (UTC), {endCity}"""
+        subtitle3 = f'Total: {dist} km, {timeElapsed}'
+                 
+        return title, subtitle1, subtitle2, subtitle3
+    
+    @staticmethod
+    def _addPopupGraph(self, selected_idx):
+        """
+        Creates elevation graph in Popup text.
+        """
+        ii, jj = selected_idx
+        # create figure with Method-based Syntax.
+        # https://altair-viz.github.io/user_guide/encodings/index.html
+        # limit number of points
+        max_nPoints = 100
+        if (jj-ii) < max_nPoints:
+            nPoints = 1
+        else:
+            nPoints = int((jj-ii)/max_nPoints)
+        
+        # titles
+        title, subtitle1, subtitle2, subtitle3 = self._addPopuptxt(self, selected_idx)
+        # plot
+        lineplot = alt.Chart(self.data[['time', 'elevation']][ii:jj:nPoints],
+                                 title = alt.Title(  title, 
+                                                     subtitle = [subtitle1, subtitle2, subtitle3])
+                                                   )\
+                            .mark_line()\
+                            .encode(
+                                 alt.X('time', axis = alt.Axis(tickMinStep=20)).title('Time (UTC'),\
+                                 alt.Y('elevation').scale(domain=(min(self.z[ii:jj:nPoints]-50), max(self.z[ii:jj:nPoints]+50))).title('Elevation (m)'),\
+                                 )\
+                            .properties(
+                                width = 300, height = 300,
+                                )
+        # turn into vega
+        elevation_graph = folium.VegaLite(
+                            lineplot,
+                            width=300,
+                            height=300,
+                            )
+        return elevation_graph
+    
     
     @staticmethod
     def _addTooltip(self, selected_idx):
@@ -459,4 +468,4 @@ class Track:
     
     @property
     def shouldiContinueCycling(self):
-        return 'yes of course.'
+        return print('yes of course.')

@@ -14,5 +14,4 @@ track = Track(pathname)
 # show cities
 # print(track.city_list)
 # show interactive map
-# track.create_map(r'./example/map.html')
-
+track.create_map(r'./example/map.html', lite = True)
