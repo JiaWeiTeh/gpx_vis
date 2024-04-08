@@ -67,7 +67,7 @@ class Track:
                 self._record()
         # simple file check.
         if len(self.x) == 0:
-            raise FileNotFoundError('No .gpx file found in given path or directory.')
+            raise FileNotFoundError('File could not be parsed.')
         
     def _record(self):
         """
@@ -297,15 +297,12 @@ class Track:
         
             
         track_coords = list(zip(self.y[ii:jj:nPoints], self.x[ii:jj:nPoints]))
-        # popup str in html
-        popupTxt = self._addPopuptxt(self, selected_idx)
         # information frame        
         # iframe = folium.IFrame(popupTxt)
         elevation_graph = self._addPopupGraph(self, selected_idx)
         # create popup
-        popup = folium.Popup(popupTxt,
-                     min_width=400,
-                     max_width=400)
+        popup = folium.Popup(min_width=400,
+                             max_width=400)
         elevation_graph.add_to(popup)
         # add tooltip
         tooltip = self._addTooltip(self, selected_idx)
@@ -417,8 +414,8 @@ class Track:
                                                    )\
                             .mark_line()\
                             .encode(
-                                 alt.X('time', axis = alt.Axis(tickMinStep=20)).title('Time (UTC'),\
-                                 alt.Y('elevation').scale(domain=(min(self.z[ii:jj:nPoints]-50), max(self.z[ii:jj:nPoints]+50))).title('Elevation (m)'),\
+                                 alt.X('time', axis = alt.Axis(tickCount = 6)).title('Time (UTC)'),\
+                                 alt.Y('elevation', axis = alt.Axis(tickMinStep=20)).scale(domain=(min(self.z[ii:jj:nPoints]-50), max(self.z[ii:jj:nPoints]+50))).title('Elevation (m)'),\
                                  )\
                             .properties(
                                 width = 300, height = 300,
