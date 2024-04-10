@@ -18,7 +18,9 @@ import numpy as np
 import pandas as pd
 import altair as alt
 import humanfriendly
+from time import time
 import reverse_geocode
+from datetime import timedelta
 from folium.plugins import MarkerCluster, MiniMap
 
 from vincenty import vincenty
@@ -48,7 +50,11 @@ class Track:
         self.z = []
         # name
         self.name = []
-        
+        # start timer
+        global _timer
+        _timer = Timer()
+        _timer.begin()
+        print('Reading data...')
         # if pathname is a folder
         # loop through file.
         if os.path.isdir(pathname):
@@ -275,6 +281,9 @@ class Track:
             filename += '.html'
         main_map.save(filename)
         
+        # show time
+        global _timer
+        _timer.end()
         return print(f"File saved as {filename}.")
     
     @staticmethod
@@ -285,7 +294,7 @@ class Track:
         selected_idx: index range of this particular track.
         """
         ii, jj = selected_idx
-        # limit number of points shown to reduce lag, if lite is enabled.
+        # limit number of points shown to reduce runtime, if lite is enabled.
         if kwargs.get('nlite') is not None:
             max_nPoints = kwargs.get('nlite')
         else:
@@ -414,7 +423,7 @@ class Track:
                                                    )\
                             .mark_line()\
                             .encode(
-                                 alt.X('time', axis = alt.Axis(tickCount = 6)).title('Time (UTC)'),\
+                                 alt.X('time', axis = alt.Axis(tickCount = 6)).title('Time (Local)'),\
                                  alt.Y('elevation', axis = alt.Axis(tickMinStep=20)).scale(domain=(min(self.z[ii:jj:nPoints]-50), max(self.z[ii:jj:nPoints]+50))).title('Elevation (m)'),\
                                  )\
                             .properties(
@@ -466,3 +475,61 @@ class Track:
     @property
     def shouldiContinueCycling(self):
         return print('yes of course.')
+    
+    
+    
+# =============================================================================
+# A script that calculates time elapsed, for debugging and performance purposes.
+# =============================================================================
+
+class Timer:
+    """
+    Timer class that calculates time elapses and prints it out 
+        in a human-friendly way. Based on .datetime and .humanfriendly.
+    Uses: 1) from clock import timer
+          2) _timer.begin('optional str here')
+          3) _timer.end() 
+          4) proift
+    """
+    
+    # initialisation
+    def __init__(self):
+        # start time
+        self.start = None
+        # end time
+        self.stop = None
+    
+    # converts time elapsed into string
+    def secs2str(self):
+        # calculate difference
+        elapsed = timedelta(seconds = self.stop - self.start)
+        # return in formatted string
+        return humanfriendly.format_timespan(elapsed)
+
+    # sets beginning of timer
+    def begin(self, s = ''):
+        # record the beginning time
+        self.start = time()
+
+    # sets end of timer
+    def end(self):
+        # make sure start is evoked:
+        if self.start == None:
+            raise InvalidCall('_timer.end() called, but .begin() not detected.')
+        # record the end time
+        self.stop = time()
+        # then, print out time elapsed.
+        time_str = self.secs2str()
+        print('~'*(len(time_str)+14))
+        print(f'Time elapsed: {time_str}.')
+        print('~'*(len(time_str)+14))
+        # reset
+        self.start = None
+        self.stop = None
+
+class InvalidCall(Exception):
+    """
+    Raised when timer call is invalid. 
+
+    For example: calling _timer.end() without explicitly calling _timer.begin().
+    """
