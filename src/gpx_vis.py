@@ -296,12 +296,13 @@ class Track:
         ii, jj = selected_idx
         # sanity check
         assert lite in [True, False], "'lite' accepts only 'True' or 'False'."
-        assert (nlist > 10), "minimum value of 'nlite' is 10."
         # limit number of points shown to reduce runtime, if lite is enabled.
         if kwargs.get('nlite') is not None:
+            assert (kwargs.get('nlite') >= 10), "minimum value of 'nlite' is 10."
             max_nPoints = kwargs.get('nlite')
         else:
             max_nPoints = 50
+        # calculate the actual index interval for desired points
         if (jj-ii) < max_nPoints or lite == False:
             nPoints = 1 #basically means plot every single point
         else:
