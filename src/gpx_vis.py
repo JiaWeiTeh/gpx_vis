@@ -18,12 +18,12 @@ import numpy as np
 import pandas as pd
 import altair as alt
 import humanfriendly
-from time import time
 import reverse_geocode
+
+from time import time
+from vincenty import vincenty
 from datetime import timedelta
 from folium.plugins import MarkerCluster, MiniMap
-
-from vincenty import vincenty
 
 class Track:
     """
