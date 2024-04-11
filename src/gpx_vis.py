@@ -96,7 +96,7 @@ class Track:
     @property
     def header(self):
         # some column name here. TBD cause headers not finalised.
-        return
+        return self.data.columns.values
     
     @property
     def data(self):
@@ -118,9 +118,9 @@ class Track:
         # return
         return df
     
-    # @property
-    # def help(self):
-    #     return "Documentations TBD"
+    @property
+    def help(self):
+        return print('Check out https://github.com/JiaWeiTeh/gpx_vis .')
             
     # =============================================================================
     # Here we deal with cities we have been in the tour.
@@ -176,7 +176,7 @@ class Track:
             # update attribute
             setattr(unique_city_list[ii], 'frequency', counts)
         # return full list of cities, sorted by country then by name
-        print('Here are the cities you have been in.')
+        print('Here are the cities you passed through on your journey.')
         return sorted(unique_city_list)
     
     # =============================================================================
@@ -294,6 +294,9 @@ class Track:
         selected_idx: index range of this particular track.
         """
         ii, jj = selected_idx
+        # sanity check
+        assert lite in [True, False], "'lite' accepts only 'True' or 'False'."
+        assert (nlist > 10), "minimum value of 'nlite' is 10."
         # limit number of points shown to reduce runtime, if lite is enabled.
         if kwargs.get('nlite') is not None:
             max_nPoints = kwargs.get('nlite')
@@ -423,12 +426,15 @@ class Track:
                                                    )\
                             .mark_line()\
                             .encode(
-                                 alt.X('time', axis = alt.Axis(tickCount = 6)).title('Time (Local)'),\
-                                 alt.Y('elevation', axis = alt.Axis(tickMinStep=20)).scale(domain=(min(self.z[ii:jj:nPoints]-50), max(self.z[ii:jj:nPoints]+50))).title('Elevation (m)'),\
+                                 x = alt.X('time:T', axis = alt.Axis(tickCount = 6)).title('Time (Local)'),\
+                                 y = alt.Y('elevation:Q', axis = alt.Axis(tickMinStep=20)).scale(domain=(min(self.z[ii:jj:nPoints]-50), max(self.z[ii:jj:nPoints]+50))).title('Elevation (m)'),\
                                  )\
                             .properties(
                                 width = 300, height = 300,
+                                )\
+                            .add_params(
                                 )
+                            
         # turn into vega
         elevation_graph = folium.VegaLite(
                             lineplot,
@@ -515,7 +521,7 @@ class Timer:
     def end(self):
         # make sure start is evoked:
         if self.start == None:
-            raise InvalidCall('_timer.end() called, but .begin() not detected.')
+            raise InvalidTimerCall('_timer.end() called, but .begin() not detected.')
         # record the end time
         self.stop = time()
         # then, print out time elapsed.
@@ -527,7 +533,7 @@ class Timer:
         self.start = None
         self.stop = None
 
-class InvalidCall(Exception):
+class InvalidTimerCall(Exception):
     """
     Raised when timer call is invalid. 
 
