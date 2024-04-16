@@ -11,7 +11,7 @@ from gpx_vis import Track
 pathname = r'./example/data'
 # load track
 track = Track(pathname)
-# show cities
+# # show city frequency
 # print(track.city_list)
-# show interactive map
+# # show interactive map
 track.create_map(r'./example/map.html')

@@ -50,10 +50,6 @@ class Track:
         self.z = []
         # name
         self.name = []
-        # start timer
-        global _timer
-        _timer = Timer()
-        _timer.begin()
         print('Reading data...')
         # if pathname is a folder
         # loop through file.
@@ -241,13 +237,16 @@ class Track:
         """
         Map out your tour on an interactive streetmaps.
         """
+        # start timer
+        _timer = Timer()
+        _timer.begin()
         # find optimal center for map display.
         map_center = self.data[['latitude', 'longitude']].mean().values.tolist()
         # southwest (minimums) and northeast (maximums) boundary.
         map_sw = self.data[['latitude', 'longitude']].min().values.tolist()
         map_ne = self.data[['latitude', 'longitude']].max().values.tolist()
         # create Map.
-        main_map = folium.Map(location = map_center)
+        main_map = folium.Map(tiles = None, location = map_center)
         # specify border.
         main_map.fit_bounds([map_sw, map_ne])
         
@@ -265,9 +264,10 @@ class Track:
         lineGroup.add_to(cluster)
         
         # add different backgrounds
-        _tilesList = ['openstreetmap', 'CartoDB Voyager', 'Cartodb dark_matter', 'cartodbpositron']
-        for tiles in _tilesList:
-            folium.TileLayer(tiles).add_to(main_map)
+        _tilesList = ['openstreetmap', 'cartodbpositron', 'CartoDB Voyager', 'Cartodb dark_matter', ]
+        _tileName = ['Street view', 'Plain', 'Plain (heirarchical)', 'Dark mode']
+        for ii, tiles in enumerate(_tilesList):
+            folium.TileLayer(tiles, name = _tileName[ii]).add_to(main_map)
         # add layer control
         folium.LayerControl(position='bottomright').add_to(main_map)
         # add minimap 
@@ -280,9 +280,7 @@ class Track:
         if not filename.endswith(".html"):
             filename += '.html'
         main_map.save(filename)
-        
         # show time
-        global _timer
         _timer.end()
         return print(f"File saved as {filename}.")
     
