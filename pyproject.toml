@@ -8,7 +8,7 @@ version = "0.3.5"
 authors = [
   { name="Jia Wei Teh", email="jiaweiteh.astro@gmail.com" },
 ]
-description = "Visualising your completed Komoot tours"
+description = "Visualising your Komoot/Strava tours"
 readme = "README.md"
 requires-python = ">=3.8"
 classifiers = [
