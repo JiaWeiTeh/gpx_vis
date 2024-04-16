@@ -240,13 +240,14 @@ class Track:
         # start timer
         _timer = Timer()
         _timer.begin()
+        print('Mapping data...')
         # find optimal center for map display.
         map_center = self.data[['latitude', 'longitude']].mean().values.tolist()
         # southwest (minimums) and northeast (maximums) boundary.
         map_sw = self.data[['latitude', 'longitude']].min().values.tolist()
         map_ne = self.data[['latitude', 'longitude']].max().values.tolist()
         # create Map.
-        main_map = folium.Map(tiles = None, location = map_center)
+        main_map = folium.Map(location = map_center)
         # specify border.
         main_map.fit_bounds([map_sw, map_ne])
         
@@ -264,10 +265,10 @@ class Track:
         lineGroup.add_to(cluster)
         
         # add different backgrounds
-        _tilesList = ['openstreetmap', 'cartodbpositron', 'CartoDB Voyager', 'Cartodb dark_matter', ]
-        _tileName = ['Street view', 'Plain', 'Plain (heirarchical)', 'Dark mode']
+        _tilesList = ['cartodbpositron', 'Cartodb dark_matter', 'CartoDB Voyager' ]
+        _tileName = ['Plain', 'Dark mode', 'Plain (heirarchical)']
         for ii, tiles in enumerate(_tilesList):
-            folium.TileLayer(tiles, name = _tileName[ii]).add_to(main_map)
+            folium.raster_layers.TileLayer(tiles, name = _tileName[ii]).add_to(main_map)
         # add layer control
         folium.LayerControl(position='bottomright').add_to(main_map)
         # add minimap 
@@ -324,7 +325,7 @@ class Track:
         # switch to map-wide colorbar by removing [ii:jj]
         folium.ColorLine(track_coords,
                         colors = self.z[ii:jj:nPoints],
-                        colormap = branca.colormap.linear.viridis.scale(min(self.z[ii:jj:nPoints]),max(self.z[ii:jj:nPoints])),
+                        colormap = branca.colormap.linear.plasma.scale(min(self.z[ii:jj:nPoints]),max(self.z[ii:jj:nPoints])),
                         tooltip = tooltip,
                         weight = 4,
                         ).add_to(group)
