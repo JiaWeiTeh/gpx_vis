@@ -179,7 +179,6 @@ class Track:
     # Track handling
     # =============================================================================
     
-    @staticmethod
     def idx_trksplit(self):
         """
         Index at which we enter a new track entry (if any).
@@ -254,10 +253,10 @@ class Track:
         # create group
         lineGroup = folium.FeatureGroup(name = "Your Routes")
         # plot waypoints for each end and beginning of a track
-        idx_split_list = self.idx_trksplit(self)
+        idx_split_list = self.idx_trksplit()
         # if list is empty, there is no splitting tracks
         for selected_idx in idx_split_list:
-            self._addTracksOnMap(self, lineGroup, selected_idx, lite, **kwargs)
+            self._addTracksOnMap(lineGroup, selected_idx, lite, **kwargs)
             
         # clusters
         cluster = MarkerCluster().add_to(main_map)
@@ -285,7 +284,6 @@ class Track:
         _timer.end()
         return print(f"File saved as {filename}.")
     
-    @staticmethod
     def _addTracksOnMap(self, group, selected_idx, lite, **kwargs):
         """
         This function adds individual tracks onto create_map().
@@ -311,13 +309,13 @@ class Track:
         track_coords = list(zip(self.y[ii:jj:nPoints], self.x[ii:jj:nPoints]))
         # information frame        
         # iframe = folium.IFrame(popupTxt)
-        elevation_graph = self._addPopupGraph(self, selected_idx)
+        elevation_graph = self._addPopupGraph(selected_idx)
         # create popup
         popup = folium.Popup(min_width=400,
                              max_width=400)
         elevation_graph.add_to(popup)
         # add tooltip
-        tooltip = self._addTooltip(self, selected_idx)
+        tooltip = self._addTooltip(selected_idx)
         # add to group
         # since elevation sometimes differ widly, perhaps it is better to use 
         # log-scale as a simple fix. (as long as there aren't zero entries)
@@ -365,7 +363,6 @@ class Track:
                 ).add_to(group)
         return  
       
-    @staticmethod
     def _addPopuptxt(self, selected_idx):
         """
         Creates str-block that contains useful info.
@@ -402,7 +399,6 @@ class Track:
                  
         return title, subtitle1, subtitle2, subtitle3
     
-    @staticmethod
     def _addPopupGraph(self, selected_idx):
         """
         Creates elevation graph in Popup text.
@@ -418,7 +414,7 @@ class Track:
             nPoints = int((jj-ii)/max_nPoints)
         
         # titles
-        title, subtitle1, subtitle2, subtitle3 = self._addPopuptxt(self, selected_idx)
+        title, subtitle1, subtitle2, subtitle3 = self._addPopuptxt(selected_idx)
         # plot
         lineplot = alt.Chart(self.data[['time', 'elevation']][ii:jj:nPoints],
                                  title = alt.Title(  title, 
@@ -444,7 +440,6 @@ class Track:
         return elevation_graph
     
     
-    @staticmethod
     def _addTooltip(self, selected_idx):
         """
         Creates str-block that contains tooltip when mouse is hovered over the track.
