@@ -50,7 +50,8 @@ class Track:
         self.z = []
         # name
         self.name = []
-        print('Reading data...')
+        _timer = Timer()
+        _timer.begin('Reading data...')
         # if pathname is a folder
         # loop through file.
         if os.path.isdir(pathname):
@@ -70,6 +71,7 @@ class Track:
         # simple file check.
         if len(self.x) == 0:
             raise FileNotFoundError('File could not be parsed.')
+        _timer.end()
         
     def _record(self):
         """
@@ -352,7 +354,7 @@ class Track:
                     # reverse coord from (y, x) into (x,y)
                     'coordinates': [coord[::-1] for coord in track_coords]
                     }}
-        # add transparent layer to help highlighting
+        # add transparent layer to help detect highlighting
         folium.features.GeoJson(
                 color = 'transparent',
                 data = highlight_line['geometry'],
@@ -521,9 +523,9 @@ class Timer:
         self.stop = time()
         # then, print out time elapsed.
         time_str = self.secs2str()
-        print('~'*(len(time_str)+14))
+        print('~'*(len(time_str)+15))
         print(f'Time elapsed: {time_str}.')
-        print('~'*(len(time_str)+14))
+        print('~'*(len(time_str)+15))
         # reset
         self.start = None
         self.stop = None
