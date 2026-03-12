@@ -31,7 +31,7 @@ class Track:
     """
     
     # =============================================================================
-    # Intialisation
+    # Initialisation
     # =============================================================================
     
     def __init__(self, pathname):
@@ -267,14 +267,14 @@ class Track:
 
         # add different backgrounds
         tiles_list = ['cartodbpositron', 'Cartodb dark_matter', 'CartoDB Voyager' ]
-        tile_names = ['Plain', 'Dark mode', 'Plain (heirarchical)']
+        tile_names = ['Plain', 'Dark mode', 'Plain (hierarchical)']
         for i, tiles in enumerate(tiles_list):
             folium.raster_layers.TileLayer(tiles, name = tile_names[i]).add_to(main_map)
         # add layer control
         folium.LayerControl(position='bottomright').add_to(main_map)
         # add minimap 
         MiniMap(toggle_display = True, zoom_level_offset = -4,
-                witdh = 400, height = 200,
+                width = 400, height = 200,
                 position = 'topright',
                 ).add_to(main_map)
         
@@ -466,12 +466,12 @@ class Track:
 
 class Timer:
     """
-    Timer class that calculates time elapses and prints it out 
+    Timer class that calculates time elapsed and prints it out
         in a human-friendly way. Based on .datetime and .humanfriendly.
     Uses: 1) from clock import timer
           2) _timer.begin('optional str here')
-          3) _timer.end() 
-          4) proift
+          3) _timer.end()
+          4) profit
     """
     
     # initialisation
@@ -495,7 +495,7 @@ class Timer:
 
     # sets end of timer
     def end(self):
-        # make sure start is evoked:
+        # make sure start is invoked:
         if self.start is None:
             raise InvalidTimerCall('_timer.end() called, but .begin() not detected.')
         # record the end time
