@@ -253,23 +253,23 @@ class Track:
         main_map.fit_bounds([map_sw, map_ne])
         
         # create group
-        lineGroup = folium.FeatureGroup(name = "Your Routes")
+        line_group = folium.FeatureGroup(name = "Your Routes")
         # plot waypoints for each end and beginning of a track
         idx_split_list = self.idx_trksplit()
         # if list is empty, there is no splitting tracks
         for selected_idx in idx_split_list:
-            self._addTracksOnMap(lineGroup, selected_idx, lite, **kwargs)
-            
+            self._add_tracks_on_map(line_group, selected_idx, lite, **kwargs)
+
         # clusters
         cluster = MarkerCluster().add_to(main_map)
         # add group to map
-        lineGroup.add_to(cluster)
-        
+        line_group.add_to(cluster)
+
         # add different backgrounds
-        _tilesList = ['cartodbpositron', 'Cartodb dark_matter', 'CartoDB Voyager' ]
-        _tileName = ['Plain', 'Dark mode', 'Plain (heirarchical)']
-        for ii, tiles in enumerate(_tilesList):
-            folium.raster_layers.TileLayer(tiles, name = _tileName[ii]).add_to(main_map)
+        tiles_list = ['cartodbpositron', 'Cartodb dark_matter', 'CartoDB Voyager' ]
+        tile_names = ['Plain', 'Dark mode', 'Plain (heirarchical)']
+        for i, tiles in enumerate(tiles_list):
+            folium.raster_layers.TileLayer(tiles, name = tile_names[i]).add_to(main_map)
         # add layer control
         folium.LayerControl(position='bottomright').add_to(main_map)
         # add minimap 
@@ -286,47 +286,45 @@ class Track:
         _timer.end()
         print(f"File saved as {filename}.")
     
-    def _addTracksOnMap(self, group, selected_idx, lite, **kwargs):
+    def _add_tracks_on_map(self, group, selected_idx, lite, **kwargs):
         """
         This function adds individual tracks onto create_map().
         group: FeatureGroup this track belongs to.
         selected_idx: index range of this particular track.
         """
-        ii, jj = selected_idx
+        start_idx, end_idx = selected_idx
         # validate inputs
         if not isinstance(lite, bool):
             raise TypeError(f"'lite' must be True or False, got {type(lite).__name__}.")
         if kwargs.get('nlite') is not None:
             if kwargs.get('nlite') < 10:
                 raise ValueError("Minimum value of 'nlite' is 10.")
-            max_nPoints = kwargs.get('nlite')
+            max_n_points = kwargs.get('nlite')
         else:
-            max_nPoints = 50
+            max_n_points = 50
         # calculate the actual index interval for desired points
-        if (jj-ii) < max_nPoints or lite == False:
-            nPoints = 1 #basically means plot every single point
+        if (end_idx - start_idx) < max_n_points or not lite:
+            n_points = 1
         else:
-            nPoints = int((jj-ii)/max_nPoints)
+            n_points = int((end_idx - start_idx) / max_n_points)
         
             
-        track_coords = list(zip(self.y[ii:jj:nPoints], self.x[ii:jj:nPoints]))
-        # information frame        
-        # iframe = folium.IFrame(popupTxt)
-        elevation_graph = self._addPopupGraph(selected_idx)
+        track_coords = list(zip(self.y[start_idx:end_idx:n_points], self.x[start_idx:end_idx:n_points]))
+        elevation_graph = self._add_popup_graph(selected_idx)
         # create popup
         popup = folium.Popup(min_width=400,
                              max_width=400)
         elevation_graph.add_to(popup)
         # add tooltip
-        tooltip = self._addTooltip(selected_idx)
+        tooltip = self._add_tooltip(selected_idx)
         # add to group
-        # since elevation sometimes differ widly, perhaps it is better to use 
+        # since elevation sometimes differ wildly, perhaps it is better to use
         # log-scale as a simple fix. (as long as there aren't zero entries)
         # Right now, I am using individual tracks for individual colorbar min/max. Can of course
-        # switch to map-wide colorbar by removing [ii:jj]
+        # switch to map-wide colorbar by removing [start_idx:end_idx]
         folium.ColorLine(track_coords,
-                        colors = self.z[ii:jj:nPoints],
-                        colormap = branca.colormap.linear.plasma.scale(min(self.z[ii:jj:nPoints]),max(self.z[ii:jj:nPoints])),
+                        colors = self.z[start_idx:end_idx:n_points],
+                        colormap = branca.colormap.linear.plasma.scale(min(self.z[start_idx:end_idx:n_points]),max(self.z[start_idx:end_idx:n_points])),
                         tooltip = tooltip,
                         weight = 4,
                         ).add_to(group)
@@ -345,95 +343,79 @@ class Track:
                       popup = popup,
                       ).add_to(group)      
         # add highlight functionality
-        # 1. hover functionality.
-        highlight_function = lambda x: {'color':'#8fe60e', 
-                                        'opacity': .5,
-                                        'weight': 10}
-        # 2. highlighted line
-        highlight_line = {'geometry': {
-                    'type': 'LineString',
-                    # reverse coord from (y, x) into (x,y)
-                    'coordinates': [coord[::-1] for coord in track_coords]
-                    }}
+        def highlight_function(_feature):
+            return {'color': '#8fe60e', 'opacity': .5, 'weight': 10}
+
+        highlight_line = {
+            'type': 'LineString',
+            # reverse coord from (lat, lon) into (lon, lat) for GeoJSON
+            'coordinates': [coord[::-1] for coord in track_coords]
+        }
         # add transparent layer to help detect highlighting
         folium.features.GeoJson(
                 color = 'transparent',
-                data = highlight_line['geometry'],
+                data = highlight_line,
                 control=False,
                 tooltip = tooltip,
-                weight = 25, #transparent layer easier to highlight
-                highlight_function=highlight_function, 
+                weight = 25,
+                highlight_function=highlight_function,
                 ).add_to(group)
-        return  
       
-    def _addPopuptxt(self, selected_idx):
+    def _add_popup_txt(self, selected_idx):
         """
         Creates str-block that contains useful info.
         """
-        # index range
-        ii, jj = selected_idx
-        # track name
-        track_name = self.name[ii]
-        track_y = self.y[ii:jj]
-        track_x = self.x[ii:jj]
-        track_t = self.t[ii:jj]
+        start_idx, end_idx = selected_idx
+        track_name = self.name[start_idx]
+        track_y = self.y[start_idx:end_idx]
+        track_x = self.x[start_idx:end_idx]
+        track_t = self.t[start_idx:end_idx]
         # get information
-        startCity = self.City(reverse_geocode.search([[track_y[0], track_x[0]]])[0]).city
-        endCity = self.City(reverse_geocode.search([[track_y[-1], track_x[-1]]])[0]).city
-        dist = self._getDistance(track_y, track_x)
-        timeElapsed = self._getTimeElapsed(track_t[0], track_t[-1])
-        
-        # Option 1: As HTML fmt-ed block
-        infostr = f"""
-                    <h3>{track_name}</h3>
-                    <h4> {startCity} - {endCity}</h4>
-                    <p> 
-                    <b>Start</b>: <em>{track_t[0].strftime('%d.%m.%Y %H:%M:%S')} (UTC)</em><br>
-                    <b>End</b>: <em>{track_t[-1].strftime('%d.%m.%Y %H:%M:%S')} (UTC)</em><br>
-                    <b>Dist</b>: {dist} km<br>
-                    <b>Duration</b>: {timeElapsed}<br>
-                    </p>
-                  """
-        # Option 2: Embedded in VegaLite graph.
+        start_city = self.City(reverse_geocode.search([[track_y[0], track_x[0]]])[0]).city
+        end_city = self.City(reverse_geocode.search([[track_y[-1], track_x[-1]]])[0]).city
+        dist = self._get_distance(track_y, track_x)
+        time_elapsed = self._get_time_elapsed(track_t[0], track_t[-1])
+
         title = f'{track_name}'
-        subtitle1 = f"""Start: {track_t[0].strftime('%d.%m.%Y %H:%M:%S')} (UTC), {startCity}"""
-        subtitle2 = f"""End: {track_t[-1].strftime('%d.%m.%Y %H:%M:%S')} (UTC), {endCity}"""
-        subtitle3 = f'Total: {dist} km, {timeElapsed}'
-                 
+        subtitle1 = f"""Start: {track_t[0].strftime('%d.%m.%Y %H:%M:%S')} (UTC), {start_city}"""
+        subtitle2 = f"""End: {track_t[-1].strftime('%d.%m.%Y %H:%M:%S')} (UTC), {end_city}"""
+        subtitle3 = f'Total: {dist} km, {time_elapsed}'
+
         return title, subtitle1, subtitle2, subtitle3
     
-    def _addPopupGraph(self, selected_idx):
+    def _add_popup_graph(self, selected_idx):
         """
         Creates elevation graph in Popup text.
         """
-        ii, jj = selected_idx
-        # create figure with Method-based Syntax.
-        # https://altair-viz.github.io/user_guide/encodings/index.html
+        start_idx, end_idx = selected_idx
         # limit number of points
-        max_nPoints = 100
-        if (jj-ii) < max_nPoints:
-            nPoints = 1
+        max_n_points = 100
+        if (end_idx - start_idx) < max_n_points:
+            n_points = 1
         else:
-            nPoints = int((jj-ii)/max_nPoints)
-        
+            n_points = int((end_idx - start_idx) / max_n_points)
+
         # titles
-        title, subtitle1, subtitle2, subtitle3 = self._addPopuptxt(selected_idx)
+        title, subtitle1, subtitle2, subtitle3 = self._add_popup_txt(selected_idx)
         # plot
-        lineplot = alt.Chart(self.data[['time', 'elevation']][ii:jj:nPoints],
-                                 title = alt.Title(  title, 
-                                                     subtitle = [subtitle1, subtitle2, subtitle3])
-                                                   )\
-                            .mark_line()\
-                            .encode(
-                                 x = alt.X('time:T', axis = alt.Axis(tickCount = 6)).title('Time (Local)'),\
-                                 y = alt.Y('elevation:Q', axis = alt.Axis(tickMinStep=20)).scale(domain=(min(self.z[ii:jj:nPoints]-50), max(self.z[ii:jj:nPoints]+50))).title('Elevation (m)'),\
-                                 )\
-                            .properties(
-                                width = 300, height = 300,
-                                )\
-                            .add_params(
-                                )
-                            
+        lineplot = (
+            alt.Chart(
+                self.data[['time', 'elevation']][start_idx:end_idx:n_points],
+                title=alt.Title(title, subtitle=[subtitle1, subtitle2, subtitle3])
+            )
+            .mark_line()
+            .encode(
+                x=alt.X('time:T', axis=alt.Axis(tickCount=6)).title('Time (Local)'),
+                y=alt.Y('elevation:Q', axis=alt.Axis(tickMinStep=20))
+                    .scale(domain=(
+                        min(self.z[start_idx:end_idx:n_points] - 50),
+                        max(self.z[start_idx:end_idx:n_points] + 50)
+                    ))
+                    .title('Elevation (m)'),
+            )
+            .properties(width=300, height=300)
+        )
+
         # turn into vega
         elevation_graph = folium.VegaLite(
                             lineplot,
@@ -443,21 +425,19 @@ class Track:
         return elevation_graph
     
     
-    def _addTooltip(self, selected_idx):
+    def _add_tooltip(self, selected_idx):
         """
         Creates str-block that contains tooltip when mouse is hovered over the track.
         """
-        ii, jj = selected_idx
-        track_name = self.name[ii]
-        infostr = f"Route: {track_name}"
-        return infostr
+        start_idx, _end_idx = selected_idx
+        track_name = self.name[start_idx]
+        return f"Route: {track_name}"
     
     @staticmethod
-    def _getDistance(latlist, lonlist):
+    def _get_distance(latlist, lonlist):
         """
         Distance travelled in kilometers, by adding up bits of routes.
         """
-
         lat1s = latlist[:-1]
         lat2s = latlist[1:]
 
@@ -465,15 +445,13 @@ class Track:
         lon2s = lonlist[1:]
 
         return round(np.cumsum([vincenty((lat1, lon1), (lat2, lon2)) for lat1, lat2, lon1, lon2 in zip(lat1s, lat2s, lon1s, lon2s)])[-1], 3)
-    
+
     @staticmethod
-    def _getTimeElapsed(start, end):
+    def _get_time_elapsed(start, end):
         """
-        Calculate time elasped.
+        Calculate time elapsed.
         """
-        # calculate difference
         elapsed = end - start
-        # readable
         return humanfriendly.format_timespan(elapsed)
     
     @property
