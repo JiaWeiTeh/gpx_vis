@@ -39,23 +39,19 @@ class Track:
         Open .gpx file and set values.
         pathname: str to either a gpx file, or a directory containing them (thus merging them).
         """
-        # quick-and-dirty way to record values
-        # Note: latitude is the horizontal line, which corresponds to 'y' in plotting.
-        #       Likewise, x = longitude.
-        self.x = []
-        self.y = []
-        # time
-        self.t = []
-        # elevation
-        self.z = []
-        # name
-        self.name = []
+        # Intermediate lists for collecting values (converted to arrays after).
+        # Note: y = latitude, x = longitude.
+        self._x_list = []
+        self._y_list = []
+        self._t_list = []
+        self._z_list = []
+        self._name_list = []
         _timer = Timer()
         _timer.begin('Reading data...')
         # if pathname is a folder
         # loop through file.
         if os.path.isdir(pathname):
-            for fname in os.listdir(pathname):
+            for fname in sorted(os.listdir(pathname)):
                 if fname.endswith('.gpx'):
                     with open(os.path.join(pathname, fname), 'r') as file:
                         self.gpx = gpxpy.parse(file)
@@ -69,27 +65,32 @@ class Track:
                 # record values
                 self._record()
         # simple file check.
-        if len(self.x) == 0:
+        if len(self._x_list) == 0:
             raise FileNotFoundError('File could not be parsed.')
+        # convert collected lists to numpy arrays
+        self.x = np.array(self._x_list, dtype=float)
+        self.y = np.array(self._y_list, dtype=float)
+        self.z = np.array(self._z_list, dtype=float)
+        self.t = np.array(self._t_list, dtype=object)
+        self.name = np.array(self._name_list, dtype=object)
+        # free the temporary lists
+        del self._x_list, self._y_list, self._z_list, self._t_list, self._name_list
+        # cache for the data property
+        self._data_cache = None
         _timer.end()
         
     def _record(self):
         """
         Going through gpx.tracks.segments.points and appending all values.
         """
-        # tracks
         for trk in self.gpx.tracks:
-            # segments
             for sgmt in trk.segments:
-                # points
                 for pt in sgmt.points:
-                    # grab values
-                    # Note: latitude is the horizontal line, which corresponds to 'y' in plotting.
-                    self.y = np.concatenate((self.y, [pt.latitude]))
-                    self.x = np.concatenate((self.x, [pt.longitude]))
-                    self.z = np.concatenate((self.z, [pt.elevation]))
-                    self.t = np.concatenate((self.t, [pt.time]))
-                    self.name = np.concatenate((self.name, [trk.name]))
+                    self._y_list.append(pt.latitude)
+                    self._x_list.append(pt.longitude)
+                    self._z_list.append(pt.elevation)
+                    self._t_list.append(pt.time)
+                    self._name_list.append(trk.name)
                     
     @property
     def header(self):
@@ -101,20 +102,17 @@ class Track:
         """
         Shows pd.DataFrame object from input gpx file.
         """
-        # some pandas library here. Set column names
-        # col_names = ['trackName', 'latitude (y; deg)', 'longitude (x; deg)', 'elevation (z; m)', 'time (t; datetime)']
+        if self._data_cache is not None:
+            return self._data_cache
         col_names = ['trackName', 'latitude', 'longitude', 'elevation', 'time']
-        # data
         data = { col_names[0]: self.name,
                 col_names[1]: self.y,
                 col_names[2]: self.x,
                 col_names[3]: self.z,
                 col_names[4]: self.t,
                 }
-        # create dataframe
-        df = pd.DataFrame(data = data)
-        # return
-        return df
+        self._data_cache = pd.DataFrame(data=data)
+        return self._data_cache
     
     @property
     def help(self):
@@ -153,26 +151,23 @@ class Track:
         def __lt__(self, other):
             return (self.country, self.city) < (other.country, other.city)
 
-    # property instead of method, so we do not have to call track.city_list().
     @property
     def city_list(self):
         """
         Obtain information of cities visited during the tour (including duplicates).
         """
-        # initialise list of cities
+        from collections import Counter
         city_list = []
         # find nearest city from coords via reverse_geocode.
         for coords in zip(self.y, self.x):
-            # create City instance, using dictionary output from reverse_geocode.
-            city = self.City(reverse_geocode.search([coords])[0]) #[0] to remove list.
+            city = self.City(reverse_geocode.search([coords])[0])
             city_list.append(city)
-        # remove duplicates 
-        unique_city_list = list(set(city_list))
-        # add frequency of appearance of city in tour
-        for ii, unique_city in enumerate(unique_city_list):
-            counts = city_list.count(unique_city)
-            # update attribute
-            setattr(unique_city_list[ii], 'frequency', counts)
+        # count frequencies in O(n) using Counter
+        city_counts = Counter(city_list)
+        unique_city_list = []
+        for city, count in city_counts.items():
+            city.frequency = count
+            unique_city_list.append(city)
         # return full list of cities, sorted by country then by name
         print('Here are the cities you passed through on your journey.')
         return sorted(unique_city_list)
@@ -210,11 +205,11 @@ class Track:
                     # end value
                     elif ii == (len(idx_list) - 1):
                         # account for both cases in the last loop
-                        track_list.append([previous_idx + 1, idx + 1])
+                        track_list.append([previous_idx, idx + 1])
                         track_list.append([idx + 1, len(self.name)])
                     # in-between values
                     else:
-                        track_list.append([previous_idx + 1, idx + 1])
+                        track_list.append([previous_idx, idx + 1])
                         previous_idx = idx + 1
             return track_list
 
@@ -452,18 +447,18 @@ class Track:
         return infostr
     
     @staticmethod
-    def _getDistance(xlist, ylist):
+    def _getDistance(latlist, lonlist):
         """
         Distance travelled in kilometers, by adding up bits of routes.
         """
-        
-        x1s = xlist[:-1]
-        x2s = xlist[1:]
-        
-        y1s = ylist[:-1]
-        y2s = ylist[1:]
-        
-        return round(np.cumsum([vincenty((x1, y1), (x2, y2)) for x1, x2, y1, y2 in zip(x1s, x2s, y1s, y2s)])[-1], 3)
+
+        lat1s = latlist[:-1]
+        lat2s = latlist[1:]
+
+        lon1s = lonlist[:-1]
+        lon2s = lonlist[1:]
+
+        return round(np.cumsum([vincenty((lat1, lon1), (lat2, lon2)) for lat1, lat2, lon1, lon2 in zip(lat1s, lat2s, lon1s, lon2s)])[-1], 3)
     
     @staticmethod
     def _getTimeElapsed(start, end):
