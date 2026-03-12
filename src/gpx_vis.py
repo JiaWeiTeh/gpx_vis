@@ -48,6 +48,9 @@ class Track:
         self._name_list = []
         _timer = Timer()
         _timer.begin('Reading data...')
+        # validate that the path exists
+        if not os.path.exists(pathname):
+            raise FileNotFoundError(f"Path not found: '{pathname}'")
         # if pathname is a folder
         # loop through file.
         if os.path.isdir(pathname):
@@ -64,9 +67,11 @@ class Track:
                     self.gpx = gpxpy.parse(file)
                 # record values
                 self._record()
-        # simple file check.
+        # check that we actually parsed some GPS points
         if len(self._x_list) == 0:
-            raise FileNotFoundError('File could not be parsed.')
+            raise ValueError(
+                f"No GPS points found. Ensure '{pathname}' contains valid .gpx files with track data."
+            )
         # convert collected lists to numpy arrays
         self.x = np.array(self._x_list, dtype=float)
         self.y = np.array(self._y_list, dtype=float)
@@ -288,11 +293,12 @@ class Track:
         selected_idx: index range of this particular track.
         """
         ii, jj = selected_idx
-        # sanity check
-        assert lite in [True, False], "'lite' accepts only 'True' or 'False'."
-        # limit number of points shown to reduce runtime, if lite is enabled.
+        # validate inputs
+        if not isinstance(lite, bool):
+            raise TypeError(f"'lite' must be True or False, got {type(lite).__name__}.")
         if kwargs.get('nlite') is not None:
-            assert (kwargs.get('nlite') >= 10), "minimum value of 'nlite' is 10."
+            if kwargs.get('nlite') < 10:
+                raise ValueError("Minimum value of 'nlite' is 10.")
             max_nPoints = kwargs.get('nlite')
         else:
             max_nPoints = 50
@@ -512,7 +518,7 @@ class Timer:
     # sets end of timer
     def end(self):
         # make sure start is evoked:
-        if self.start == None:
+        if self.start is None:
             raise InvalidTimerCall('_timer.end() called, but .begin() not detected.')
         # record the end time
         self.stop = time()
