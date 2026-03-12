@@ -57,16 +57,16 @@ class Track:
             for fname in sorted(os.listdir(pathname)):
                 if fname.endswith('.gpx'):
                     with open(os.path.join(pathname, fname), 'r') as file:
-                        self.gpx = gpxpy.parse(file)
+                        gpx = gpxpy.parse(file)
                     # record values
-                    self._record()
+                    self._record(gpx)
         # else just read
         elif os.path.isfile(pathname):
             if pathname.endswith('.gpx'):
                 with open(pathname, 'r') as file:
-                    self.gpx = gpxpy.parse(file)
+                    gpx = gpxpy.parse(file)
                 # record values
-                self._record()
+                self._record(gpx)
         # check that we actually parsed some GPS points
         if len(self._x_list) == 0:
             raise ValueError(
@@ -84,11 +84,11 @@ class Track:
         self._data_cache = None
         _timer.end()
         
-    def _record(self):
+    def _record(self, gpx):
         """
         Going through gpx.tracks.segments.points and appending all values.
         """
-        for trk in self.gpx.tracks:
+        for trk in gpx.tracks:
             for sgmt in trk.segments:
                 for pt in sgmt.points:
                     self._y_list.append(pt.latitude)
@@ -119,9 +119,9 @@ class Track:
         self._data_cache = pd.DataFrame(data=data)
         return self._data_cache
     
-    @property
     def help(self):
-        return print('Check out https://github.com/JiaWeiTeh/gpx_vis .')
+        """Print the project URL."""
+        print('Check out https://github.com/JiaWeiTeh/gpx_vis .')
             
     # =============================================================================
     # Here we deal with cities we have been in the tour.
@@ -284,7 +284,7 @@ class Track:
         main_map.save(filename)
         # show time
         _timer.end()
-        return print(f"File saved as {filename}.")
+        print(f"File saved as {filename}.")
     
     def _addTracksOnMap(self, group, selected_idx, lite, **kwargs):
         """
@@ -478,7 +478,7 @@ class Track:
     
     @property
     def shouldiContinueCycling(self):
-        return print('yes of course.')
+        print('yes of course.')
     
     
     
