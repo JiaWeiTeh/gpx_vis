@@ -11,7 +11,6 @@ This script combines .gpx files in /data and overplots them onto a HTML file.
 import gpxpy
 
 import os
-import math
 import logging
 import branca
 import folium
@@ -173,11 +172,10 @@ class Track:
         Obtain information of cities visited during the tour (including duplicates).
         """
         from collections import Counter
-        city_list = []
-        # find nearest city from coords via reverse_geocode.
-        for coords in zip(self.y, self.x):
-            city = self.City(reverse_geocode.search([coords])[0])
-            city_list.append(city)
+        # batch reverse geocode all coordinates at once (much faster than per-point)
+        all_coords = list(zip(self.y, self.x))
+        all_results = reverse_geocode.search(all_coords)
+        city_list = [self.City(result) for result in all_results]
         # count frequencies in O(n) using Counter
         city_counts = Counter(city_list)
         unique_city_list = []
@@ -197,7 +195,7 @@ class Track:
         Index at which we enter a new track entry (if any).
         Note: x -> x[i,j], x[k+1, l]. See plt_tracks().
         """
-        idx_list =  np.where(self.name[:-1] != self.name[1:])[0]
+        idx_list = np.where(self.name[:-1] != self.name[1:])[0]
         # we provide list of indices at which tracks separate.
         track_list = []
         # list is empty if there is only one track route.
@@ -229,18 +227,6 @@ class Track:
                         previous_idx = idx + 1
             return track_list
 
-    # =============================================================================
-    # Plotting on graphs    
-    # =============================================================================
-
-        
-    @staticmethod
-    def _round2n(x, n):
-        """rounds to n significant numbers"""
-        return round(x, -int(math.floor(np.log10(x))) + (n - 1))
-        
-    
-    
     # =============================================================================
     # Plotting on maps
     # =============================================================================
@@ -455,7 +441,7 @@ class Track:
         lon1s = lonlist[:-1]
         lon2s = lonlist[1:]
 
-        return round(np.cumsum([vincenty((lat1, lon1), (lat2, lon2)) for lat1, lat2, lon1, lon2 in zip(lat1s, lat2s, lon1s, lon2s)])[-1], 3)
+        return round(sum(vincenty((lat1, lon1), (lat2, lon2)) for lat1, lat2, lon1, lon2 in zip(lat1s, lat2s, lon1s, lon2s)), 3)
 
     @staticmethod
     def _get_time_elapsed(start, end):
@@ -466,7 +452,7 @@ class Track:
         return humanfriendly.format_timespan(elapsed)
     
     @property
-    def shouldiContinueCycling(self):
+    def should_i_continue_cycling(self):
         logger.info('yes of course.')
     
     
