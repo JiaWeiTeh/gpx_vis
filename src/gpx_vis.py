@@ -31,11 +31,11 @@ class Track:
     """
     Instance used to process .gpx files.
     """
-    
+
     # =============================================================================
     # Initialisation
     # =============================================================================
-    
+
     def __init__(self, pathname: str):
         """
         Open .gpx file and set values.
@@ -51,7 +51,7 @@ class Track:
         self._z_list = []
         self._name_list = []
         _timer = Timer()
-        _timer.begin('Reading data...')
+        _timer.begin()
         # validate that the path exists
         if not os.path.exists(pathname):
             raise FileNotFoundError(f"Path not found: '{pathname}'")
@@ -93,7 +93,7 @@ class Track:
         # cache for the data property
         self._data_cache = None
         _timer.end()
-        
+
     def _record(self, gpx):
         """
         Going through gpx.tracks.segments.points and appending all values.
@@ -106,12 +106,12 @@ class Track:
                     self._z_list.append(pt.elevation if pt.elevation is not None else 0.0)
                     self._t_list.append(pt.time)
                     self._name_list.append(trk.name)
-                    
+
     @property
     def header(self):
         # some column name here. TBD cause headers not finalised.
         return self.data.columns.values
-    
+
     @property
     def data(self) -> pd.DataFrame:
         """
@@ -128,11 +128,11 @@ class Track:
                 }
         self._data_cache = pd.DataFrame(data=data)
         return self._data_cache
-    
+
     def help(self):
         """Print the project URL."""
         logger.info('Check out https://github.com/JiaWeiTeh/gpx_vis .')
-            
+
     # =============================================================================
     # Here we deal with cities we have been in the tour.
     # =============================================================================
@@ -145,7 +145,7 @@ class Track:
         >>> city.code = DE
         >>> city.frequency = 204
         """
-        
+
         def __init__(self, city_data):
             self.city = city_data['city']
             self.country = city_data['country']
@@ -185,11 +185,11 @@ class Track:
         # return full list of cities, sorted by country then by name
         logger.info('Here are the cities you passed through on your journey.')
         return sorted(unique_city_list)
-    
+
     # =============================================================================
     # Track handling
     # =============================================================================
-    
+
     def idx_trksplit(self):
         """
         Index at which we enter a new track entry (if any).
@@ -201,10 +201,10 @@ class Track:
         # list is empty if there is only one track route.
         if len(idx_list) == 0:
             track_list.append([0, len(self.name)])
-            return track_list 
+            return track_list
         else:
             # record index from previous loop
-            previous_idx = 0 
+            previous_idx = 0
             # corner case
             if len(idx_list) == 1:
                 idx = idx_list[0]
@@ -230,7 +230,7 @@ class Track:
     # =============================================================================
     # Plotting on maps
     # =============================================================================
-    
+
     def create_map(self, filename: str, lite: bool = False, **kwargs) -> None:
         """
         Map out your tour on an interactive streetmaps.
@@ -248,7 +248,7 @@ class Track:
         main_map = folium.Map(location = map_center)
         # specify border.
         main_map.fit_bounds([map_sw, map_ne])
-        
+
         # create group
         line_group = folium.FeatureGroup(name = "Your Routes")
         # plot waypoints for each end and beginning of a track
@@ -269,12 +269,12 @@ class Track:
             folium.raster_layers.TileLayer(tiles, name = tile_names[i]).add_to(main_map)
         # add layer control
         folium.LayerControl(position='bottomright').add_to(main_map)
-        # add minimap 
+        # add minimap
         MiniMap(toggle_display = True, zoom_level_offset = -4,
                 width = 400, height = 200,
                 position = 'topright',
                 ).add_to(main_map)
-        
+
         # save
         if not filename.endswith(".html"):
             filename += '.html'
@@ -282,7 +282,7 @@ class Track:
         # show time
         _timer.end()
         logger.info(f"File saved as {filename}.")
-    
+
     def _add_tracks_on_map(self, group, selected_idx, lite, **kwargs):
         """
         This function adds individual tracks onto create_map().
@@ -304,8 +304,7 @@ class Track:
             n_points = 1
         else:
             n_points = int((end_idx - start_idx) / max_n_points)
-        
-            
+
         track_coords = list(zip(self.y[start_idx:end_idx:n_points], self.x[start_idx:end_idx:n_points]))
         elevation_graph = self._add_popup_graph(selected_idx)
         # create popup
@@ -325,7 +324,7 @@ class Track:
                         tooltip = tooltip,
                         weight = 4,
                         ).add_to(group)
-        
+
         # add start/finish points
         folium.CircleMarker(location = track_coords[0],
                             radius = 5,
@@ -338,7 +337,7 @@ class Track:
         folium.Marker(location = track_coords[-1],
                       icon=folium.Icon(color="green", icon="flag"),
                       popup = popup,
-                      ).add_to(group)      
+                      ).add_to(group)
         # add highlight functionality
         def highlight_function(_feature):
             return {'color': '#8fe60e', 'opacity': .5, 'weight': 10}
@@ -357,7 +356,7 @@ class Track:
                 weight = 25,
                 highlight_function=highlight_function,
                 ).add_to(group)
-      
+
     def _add_popup_txt(self, selected_idx):
         """
         Creates str-block that contains useful info.
@@ -379,7 +378,7 @@ class Track:
         subtitle3 = f'Total: {dist} km, {time_elapsed}'
 
         return title, subtitle1, subtitle2, subtitle3
-    
+
     def _add_popup_graph(self, selected_idx):
         """
         Creates elevation graph in Popup text.
@@ -420,8 +419,7 @@ class Track:
                             height=300,
                             )
         return elevation_graph
-    
-    
+
     def _add_tooltip(self, selected_idx):
         """
         Creates str-block that contains tooltip when mouse is hovered over the track.
@@ -429,7 +427,7 @@ class Track:
         start_idx, _end_idx = selected_idx
         track_name = self.name[start_idx]
         return f"Route: {track_name}"
-    
+
     @staticmethod
     def _get_distance(latlist, lonlist):
         """
@@ -450,13 +448,12 @@ class Track:
         """
         elapsed = end - start
         return humanfriendly.format_timespan(elapsed)
-    
+
     @property
     def should_i_continue_cycling(self):
         logger.info('yes of course.')
-    
-    
-    
+
+
 # =============================================================================
 # A script that calculates time elapsed, for debugging and performance purposes.
 # =============================================================================
@@ -466,18 +463,18 @@ class Timer:
     Timer class that calculates time elapsed and prints it out
         in a human-friendly way. Based on .datetime and .humanfriendly.
     Uses: 1) from clock import timer
-          2) _timer.begin('optional str here')
+          2) _timer.begin()
           3) _timer.end()
           4) profit
     """
-    
+
     # initialisation
     def __init__(self):
         # start time
         self.start = None
         # end time
         self.stop = None
-    
+
     # converts time elapsed into string
     def secs2str(self):
         # calculate difference
@@ -486,7 +483,7 @@ class Timer:
         return humanfriendly.format_timespan(elapsed)
 
     # sets beginning of timer
-    def begin(self, s = ''):
+    def begin(self):
         # record the beginning time
         self.start = time()
 
@@ -507,7 +504,7 @@ class Timer:
 
 class InvalidTimerCall(Exception):
     """
-    Raised when timer call is invalid. 
+    Raised when timer call is invalid.
 
     For example: calling _timer.end() without explicitly calling _timer.begin().
     """
