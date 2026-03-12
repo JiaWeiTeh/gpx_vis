@@ -12,6 +12,7 @@ import gpxpy
 
 import os
 import math
+import logging
 import branca
 import folium
 import numpy as np
@@ -25,6 +26,8 @@ from vincenty import vincenty
 from datetime import timedelta
 from folium.plugins import MarkerCluster, MiniMap
 
+logger = logging.getLogger(__name__)
+
 class Track:
     """
     Instance used to process .gpx files.
@@ -34,11 +37,13 @@ class Track:
     # Initialisation
     # =============================================================================
     
-    def __init__(self, pathname):
+    def __init__(self, pathname: str):
         """
         Open .gpx file and set values.
         pathname: str to either a gpx file, or a directory containing them (thus merging them).
         """
+        if not isinstance(pathname, str):
+            raise TypeError(f"'pathname' must be a string, got {type(pathname).__name__}.")
         # Intermediate lists for collecting values (converted to arrays after).
         # Note: y = latitude, x = longitude.
         self._x_list = []
@@ -80,6 +85,12 @@ class Track:
         self.name = np.array(self._name_list, dtype=object)
         # free the temporary lists
         del self._x_list, self._y_list, self._z_list, self._t_list, self._name_list
+        # warn about missing data
+        if any(t is None for t in self.t):
+            logger.warning(
+                "Some GPS points have no timestamp. "
+                "Time-dependent features (duration, elevation graph) may not work correctly."
+            )
         # cache for the data property
         self._data_cache = None
         _timer.end()
@@ -93,7 +104,7 @@ class Track:
                 for pt in sgmt.points:
                     self._y_list.append(pt.latitude)
                     self._x_list.append(pt.longitude)
-                    self._z_list.append(pt.elevation)
+                    self._z_list.append(pt.elevation if pt.elevation is not None else 0.0)
                     self._t_list.append(pt.time)
                     self._name_list.append(trk.name)
                     
@@ -103,7 +114,7 @@ class Track:
         return self.data.columns.values
     
     @property
-    def data(self):
+    def data(self) -> pd.DataFrame:
         """
         Shows pd.DataFrame object from input gpx file.
         """
@@ -121,7 +132,7 @@ class Track:
     
     def help(self):
         """Print the project URL."""
-        print('Check out https://github.com/JiaWeiTeh/gpx_vis .')
+        logger.info('Check out https://github.com/JiaWeiTeh/gpx_vis .')
             
     # =============================================================================
     # Here we deal with cities we have been in the tour.
@@ -157,7 +168,7 @@ class Track:
             return (self.country, self.city) < (other.country, other.city)
 
     @property
-    def city_list(self):
+    def city_list(self) -> list:
         """
         Obtain information of cities visited during the tour (including duplicates).
         """
@@ -174,7 +185,7 @@ class Track:
             city.frequency = count
             unique_city_list.append(city)
         # return full list of cities, sorted by country then by name
-        print('Here are the cities you passed through on your journey.')
+        logger.info('Here are the cities you passed through on your journey.')
         return sorted(unique_city_list)
     
     # =============================================================================
@@ -234,14 +245,14 @@ class Track:
     # Plotting on maps
     # =============================================================================
     
-    def create_map(self, filename, lite = False, **kwargs):
+    def create_map(self, filename: str, lite: bool = False, **kwargs) -> None:
         """
         Map out your tour on an interactive streetmaps.
         """
         # start timer
         _timer = Timer()
         _timer.begin()
-        print('Mapping data...')
+        logger.info('Mapping data...')
         # find optimal center for map display.
         map_center = self.data[['latitude', 'longitude']].mean().values.tolist()
         # southwest (minimums) and northeast (maximums) boundary.
@@ -284,7 +295,7 @@ class Track:
         main_map.save(filename)
         # show time
         _timer.end()
-        print(f"File saved as {filename}.")
+        logger.info(f"File saved as {filename}.")
     
     def _add_tracks_on_map(self, group, selected_idx, lite, **kwargs):
         """
@@ -456,7 +467,7 @@ class Track:
     
     @property
     def shouldiContinueCycling(self):
-        print('yes of course.')
+        logger.info('yes of course.')
     
     
     
@@ -502,9 +513,8 @@ class Timer:
         self.stop = time()
         # then, print out time elapsed.
         time_str = self.secs2str()
-        print('~'*(len(time_str)+15))
-        print(f'Time elapsed: {time_str}.')
-        print('~'*(len(time_str)+15))
+        separator = '~' * (len(time_str) + 15)
+        logger.debug(f'{separator}\nTime elapsed: {time_str}.\n{separator}')
         # reset
         self.start = None
         self.stop = None
