@@ -10,19 +10,19 @@ authors = [
 ]
 description = "Visualising your Komoot/Strava tours"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "folium",
-    "branca",
-    "numpy",
-    "pandas",
-    "humanfriendly",
-    "reverse_geocode",
-    "vincenty",
-    "altair",
-    "gpxpy",
+    "folium>=0.14,<1",
+    "branca>=0.6,<1",
+    "numpy>=1.23,<3",
+    "pandas>=1.5,<3",
+    "humanfriendly>=10.0,<11",
+    "reverse_geocode>=1.6,<2",
+    "vincenty>=0.1.4,<1",
+    "altair>=5,<7",
+    "gpxpy>=1.5,<2",
 ]
