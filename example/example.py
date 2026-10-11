@@ -25,7 +25,10 @@ def main(argv=None):
 
     track = Track(data)
     track.create_map(output, lite=True, nlite=200)
-    # cities passed through, sorted by country then name:
+    # distance, total and moving time, average and top speed per route
+    columns = ['name', 'distance_km', 'moving_time', 'moving_speed_kmh', 'max_speed_kmh']
+    print(track.summary[columns].round(1).to_string(index=False))
+    # cities passed through, with the time spent in each:
     # print(track.city_list)
 
 
