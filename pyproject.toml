@@ -1,19 +1,31 @@
 [build-system]
-requires = ["setuptools >= 61.0", "wheel"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "gpx_vis"
-version = "0.3.6"
-authors = [
-  { name="Jia Wei Teh", email="jiaweiteh.astro@gmail.com" },
-]
-description = "Visualising your Komoot/Strava tours"
+dynamic = ["version"]
+description = "Turn your Komoot / Strava / .gpx tracks into an interactive HTML map"
 readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
 requires-python = ">=3.9"
+authors = [
+  { name = "Jia Wei Teh", email = "jiaweiteh.astro@gmail.com" },
+]
+keywords = ["gpx", "gps", "map", "folium", "komoot", "strava", "cycling", "hiking"]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Visualization",
 ]
 dependencies = [
     "folium>=0.14,<1",
@@ -26,3 +38,21 @@ dependencies = [
     "altair>=5,<7",
     "gpxpy>=1.5,<2",
 ]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/JiaWeiTeh/gpx_vis"
+Repository = "https://github.com/JiaWeiTeh/gpx_vis"
+Issues = "https://github.com/JiaWeiTeh/gpx_vis/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "gpx_vis.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

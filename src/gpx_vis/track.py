@@ -1,31 +1,38 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""Core of gpx_vis: load ``.gpx`` tracks and draw them on an interactive map.
+
+A :class:`Track` reads one ``.gpx`` file or a folder of them, keeps the raw
+latitude / longitude / elevation / time arrays, and can write a self-contained
+HTML map (built with folium) with one elevation-coloured route per track.
 """
-Created on Tue Apr 2 23:14:31 2024
-
-@author: Jia Wei Teh
-
-This script combines .gpx files in /data and overplots them onto a HTML file.
-"""
-# main library
-import gpxpy
-
-import os
 import logging
+import operator
+import os
+from collections import Counter
+
+import altair as alt
 import branca
 import folium
+import gpxpy
+import humanfriendly
 import numpy as np
 import pandas as pd
-import altair as alt
-import humanfriendly
 import reverse_geocode
-
-from time import time
-from vincenty import vincenty
-from datetime import timedelta
+import xyzservices.providers as xyz
 from folium.plugins import MarkerCluster, MiniMap
+from vincenty import vincenty
+
+from .timer import Timer
 
 logger = logging.getLogger(__name__)
+
+# Background layers offered in the layer control (bottom-right corner of the map).
+# CARTO basemaps officially require a free API key; see ``Track.create_map``.
+_CARTO_LAYERS = [
+    ('Positron', 'Plain'),
+    ('DarkMatter', 'Dark mode'),
+    ('Voyager', 'Plain (hierarchical)'),
+]
+
 
 class Track:
     """
@@ -36,13 +43,15 @@ class Track:
     # Initialisation
     # =============================================================================
 
-    def __init__(self, pathname: str):
+    def __init__(self, pathname):
         """
         Open .gpx file and set values.
-        pathname: str to either a gpx file, or a directory containing them (thus merging them).
+        pathname: path (str or pathlib.Path) to either a gpx file, or a directory
+                  containing them (thus merging them).
         """
-        if not isinstance(pathname, str):
-            raise TypeError(f"'pathname' must be a string, got {type(pathname).__name__}.")
+        if not isinstance(pathname, (str, os.PathLike)):
+            raise TypeError(f"'pathname' must be a str or Path, got {type(pathname).__name__}.")
+        pathname = os.fspath(pathname)
         # Intermediate lists for collecting values (converted to arrays after).
         # Note: y = latitude, x = longitude.
         self._x_list = []
@@ -52,6 +61,7 @@ class Track:
         self._name_list = []
         _timer = Timer()
         _timer.begin()
+        logger.info('Reading data...')
         # validate that the path exists
         if not os.path.exists(pathname):
             raise FileNotFoundError(f"Path not found: '{pathname}'")
@@ -109,7 +119,7 @@ class Track:
 
     @property
     def header(self):
-        # some column name here. TBD cause headers not finalised.
+        """Column names of ``Track.data``."""
         return self.data.columns.values
 
     @property
@@ -171,7 +181,6 @@ class Track:
         """
         Obtain information of cities visited during the tour (including duplicates).
         """
-        from collections import Counter
         # batch reverse geocode all coordinates at once (much faster than per-point)
         all_coords = list(zip(self.y, self.x))
         all_results = reverse_geocode.search(all_coords)
@@ -193,7 +202,7 @@ class Track:
     def idx_trksplit(self):
         """
         Index at which we enter a new track entry (if any).
-        Note: x -> x[i,j], x[k+1, l]. See plt_tracks().
+        Returns a list of [start, end) index pairs, one per track.
         """
         idx_list = np.where(self.name[:-1] != self.name[1:])[0]
         # we provide list of indices at which tracks separate.
@@ -231,10 +240,32 @@ class Track:
     # Plotting on maps
     # =============================================================================
 
-    def create_map(self, filename: str, lite: bool = False, **kwargs) -> None:
+    def create_map(self, filename, lite=False, nlite=50, carto_api_key=None):
         """
-        Map out your tour on an interactive streetmaps.
+        Draw every track on an interactive map and save it as an HTML file.
+
+        filename: output path (str or pathlib.Path); '.html' is appended if missing.
+        lite: if True, draw at most about `nlite` points per track (faster for big files).
+        nlite: point budget per track in lite mode (minimum 10).
+        carto_api_key: key for the CARTO backgrounds (Plain, Dark mode,
+            Plain (hierarchical)). Defaults to the CARTO_API_KEY environment
+            variable. Without a key those layers may stay blank; the
+            OpenStreetMap and Topographic backgrounds need no key.
+            Note: the key is written into the generated HTML file.
+        Returns the path of the written file.
         """
+        # validate inputs
+        if not isinstance(lite, bool):
+            raise TypeError(f"'lite' must be True or False, got {type(lite).__name__}.")
+        try:
+            nlite = operator.index(nlite)
+        except TypeError:
+            raise TypeError(f"'nlite' must be an integer, got {type(nlite).__name__}.") from None
+        if nlite < 10:
+            raise ValueError("Minimum value of 'nlite' is 10.")
+        filename = os.fspath(filename)
+        if not filename.endswith('.html'):
+            filename += '.html'
         # start timer
         _timer = Timer()
         _timer.begin()
@@ -244,7 +275,7 @@ class Track:
         # southwest (minimums) and northeast (maximums) boundary.
         map_sw = self.data[['latitude', 'longitude']].min().values.tolist()
         map_ne = self.data[['latitude', 'longitude']].max().values.tolist()
-        # create Map.
+        # create Map (default background: OpenStreetMap).
         main_map = folium.Map(location = map_center)
         # specify border.
         main_map.fit_bounds([map_sw, map_ne])
@@ -255,7 +286,7 @@ class Track:
         idx_split_list = self.idx_trksplit()
         # if list is empty, there is no splitting tracks
         for selected_idx in idx_split_list:
-            self._add_tracks_on_map(line_group, selected_idx, lite, **kwargs)
+            self._add_tracks_on_map(line_group, selected_idx, lite, nlite)
 
         # clusters
         cluster = MarkerCluster().add_to(main_map)
@@ -263,10 +294,12 @@ class Track:
         line_group.add_to(cluster)
 
         # add different backgrounds
-        tiles_list = ['cartodbpositron', 'Cartodb dark_matter', 'CartoDB Voyager' ]
-        tile_names = ['Plain', 'Dark mode', 'Plain (hierarchical)']
-        for i, tiles in enumerate(tiles_list):
-            folium.raster_layers.TileLayer(tiles, name = tile_names[i]).add_to(main_map)
+        key = carto_api_key or os.environ.get('CARTO_API_KEY')
+        for provider_name, label in _CARTO_LAYERS:
+            provider = getattr(xyz.CartoDB, provider_name)
+            tiles = provider(apikey=key) if key else provider
+            folium.TileLayer(tiles=tiles, name=label).add_to(main_map)
+        folium.TileLayer(tiles='OpenTopoMap', name='Topographic').add_to(main_map)
         # add layer control
         folium.LayerControl(position='bottomright').add_to(main_map)
         # add minimap
@@ -276,34 +309,25 @@ class Track:
                 ).add_to(main_map)
 
         # save
-        if not filename.endswith(".html"):
-            filename += '.html'
         main_map.save(filename)
         # show time
         _timer.end()
         logger.info(f"File saved as {filename}.")
+        return filename
 
-    def _add_tracks_on_map(self, group, selected_idx, lite, **kwargs):
+    def _add_tracks_on_map(self, group, selected_idx, lite, nlite):
         """
         This function adds individual tracks onto create_map().
         group: FeatureGroup this track belongs to.
         selected_idx: index range of this particular track.
+        lite, nlite: see create_map().
         """
         start_idx, end_idx = selected_idx
-        # validate inputs
-        if not isinstance(lite, bool):
-            raise TypeError(f"'lite' must be True or False, got {type(lite).__name__}.")
-        if kwargs.get('nlite') is not None:
-            if kwargs.get('nlite') < 10:
-                raise ValueError("Minimum value of 'nlite' is 10.")
-            max_n_points = kwargs.get('nlite')
-        else:
-            max_n_points = 50
         # calculate the actual index interval for desired points
-        if (end_idx - start_idx) < max_n_points or not lite:
-            n_points = 1
+        if lite and (end_idx - start_idx) >= nlite:
+            n_points = int((end_idx - start_idx) / nlite)
         else:
-            n_points = int((end_idx - start_idx) / max_n_points)
+            n_points = 1
 
         track_coords = list(zip(self.y[start_idx:end_idx:n_points], self.x[start_idx:end_idx:n_points]))
         elevation_graph = self._add_popup_graph(selected_idx)
@@ -452,59 +476,3 @@ class Track:
     @property
     def should_i_continue_cycling(self):
         logger.info('yes of course.')
-
-
-# =============================================================================
-# A script that calculates time elapsed, for debugging and performance purposes.
-# =============================================================================
-
-class Timer:
-    """
-    Timer class that calculates time elapsed and prints it out
-        in a human-friendly way. Based on .datetime and .humanfriendly.
-    Uses: 1) from clock import timer
-          2) _timer.begin()
-          3) _timer.end()
-          4) profit
-    """
-
-    # initialisation
-    def __init__(self):
-        # start time
-        self.start = None
-        # end time
-        self.stop = None
-
-    # converts time elapsed into string
-    def secs2str(self):
-        # calculate difference
-        elapsed = timedelta(seconds = self.stop - self.start)
-        # return in formatted string
-        return humanfriendly.format_timespan(elapsed)
-
-    # sets beginning of timer
-    def begin(self):
-        # record the beginning time
-        self.start = time()
-
-    # sets end of timer
-    def end(self):
-        # make sure start is invoked:
-        if self.start is None:
-            raise InvalidTimerCall('_timer.end() called, but .begin() not detected.')
-        # record the end time
-        self.stop = time()
-        # then, print out time elapsed.
-        time_str = self.secs2str()
-        separator = '~' * (len(time_str) + 15)
-        logger.debug(f'{separator}\nTime elapsed: {time_str}.\n{separator}')
-        # reset
-        self.start = None
-        self.stop = None
-
-class InvalidTimerCall(Exception):
-    """
-    Raised when timer call is invalid.
-
-    For example: calling _timer.end() without explicitly calling _timer.begin().
-    """

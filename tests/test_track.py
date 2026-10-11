@@ -1,12 +1,11 @@
-#!/usr/bin/env python3
-"""
-Tests for the gpx_vis Track class.
-"""
+"""Tests for the gpx_vis Track class (run with ``pytest`` from the repo root)."""
 import os
-import pytest
-import numpy as np
+from pathlib import Path
 
-from src.gpx_vis import Track
+import numpy as np
+import pytest
+
+from gpx_vis import Track
 
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'example', 'data')
@@ -26,6 +25,10 @@ class TestTrackInit:
 
     def test_load_directory(self):
         track = Track(DATA_DIR)
+        assert len(track.x) > 0
+
+    def test_load_pathlib_path(self):
+        track = Track(Path(SINGLE_FILE))
         assert len(track.x) > 0
 
     def test_invalid_path_raises_file_not_found(self):
@@ -105,6 +108,10 @@ class TestTrackSplit:
         assert splits[0][0] == 0
         assert splits[-1][1] == len(multi_track.name)
 
+    def test_multi_track_one_segment_per_file(self, multi_track):
+        splits = multi_track.idx_trksplit()
+        assert len(splits) == len([f for f in os.listdir(DATA_DIR) if f.endswith('.gpx')])
+
 
 class TestCreateMap:
     """Tests for map creation."""
@@ -119,15 +126,32 @@ class TestCreateMap:
         assert os.path.exists(output)
         assert os.path.getsize(output) > 0
 
+    def test_create_map_returns_output_path(self, track, tmp_path):
+        output = str(tmp_path / "test_map.html")
+        assert track.create_map(output) == output
+
     def test_create_map_adds_html_extension(self, track, tmp_path):
         output = str(tmp_path / "test_map")
-        track.create_map(output)
+        result = track.create_map(output)
+        assert result == output + ".html"
         assert os.path.exists(output + ".html")
+
+    def test_create_map_accepts_pathlib_path(self, track, tmp_path):
+        output = tmp_path / "test_map.html"
+        track.create_map(output)
+        assert output.exists()
 
     def test_create_map_lite_mode(self, track, tmp_path):
         output = str(tmp_path / "test_map_lite.html")
         track.create_map(output, lite=True, nlite=20)
         assert os.path.exists(output)
+
+    def test_create_map_lite_mode_writes_fewer_points(self, track, tmp_path):
+        full = (tmp_path / "full.html")
+        lite = (tmp_path / "lite.html")
+        track.create_map(full)
+        track.create_map(lite, lite=True, nlite=20)
+        assert lite.stat().st_size < full.stat().st_size
 
     def test_create_map_invalid_lite_type(self, track, tmp_path):
         output = str(tmp_path / "test_map.html")
@@ -138,3 +162,33 @@ class TestCreateMap:
         output = str(tmp_path / "test_map.html")
         with pytest.raises(ValueError):
             track.create_map(output, lite=True, nlite=5)
+
+    def test_create_map_nlite_not_integer(self, track, tmp_path):
+        output = str(tmp_path / "test_map.html")
+        with pytest.raises(TypeError):
+            track.create_map(output, lite=True, nlite=20.5)
+
+    def test_create_map_background_layers(self, track, tmp_path):
+        output = tmp_path / "layers.html"
+        track.create_map(output)
+        html = output.read_text()
+        for name in ("Plain", "Dark mode", "Plain (hierarchical)", "Topographic"):
+            assert name in html
+        assert "key=" not in html  # no API key written unless one was given
+
+    def test_create_map_carto_api_key_in_tile_urls(self, track, tmp_path, monkeypatch):
+        monkeypatch.delenv("CARTO_API_KEY", raising=False)
+        output = tmp_path / "keyed.html"
+        track.create_map(output, carto_api_key="TESTKEY123")
+        assert "key=TESTKEY123" in output.read_text()
+
+
+class TestCityList:
+    """Tests for reverse-geocoded city summary."""
+
+    def test_city_list_sorted_with_frequencies(self):
+        cities = Track(SINGLE_FILE).city_list
+        assert len(cities) > 0
+        assert all(c.frequency > 0 for c in cities)
+        assert sum(c.frequency for c in cities) == len(Track(SINGLE_FILE).x)
+        assert cities == sorted(cities)
