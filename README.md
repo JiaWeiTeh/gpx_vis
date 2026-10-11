@@ -6,7 +6,7 @@ Works with exports from [Komoot](https://www.komoot.com/), [Strava](https://www.
 
 [**Live example**](https://raw.githack.com/JiaWeiTeh/gpx_vis/main/example/map.html) (five rides around Boston)
 
-![Click the flag at the end of a route for details and an elevation profile](https://raw.githubusercontent.com/JiaWeiTeh/gpx_vis/main/media/track_info.png)
+![Click the flag at the end of a route for its details and chart](https://raw.githubusercontent.com/JiaWeiTeh/gpx_vis/main/media/track_info.png)
 
 ## Install
 
@@ -37,7 +37,15 @@ Give `Track` a folder and every `.gpx` file inside is drawn on the same map, eac
 
 ## What you get
 
-**Interactive map.** Each route is coloured by elevation (purple = low, yellow = high). Hover a route to see its name; click the flag at its end for start/end time and place, distance, duration and an elevation profile.
+**Interactive map.** Each route is coloured by speed (purple = slow, yellow = fast), on one scale for the whole map shown in the legend. Hover a route to see its name. Click the flag at its end for start/end time and place, distance, duration, average and top speed, and a speed-over-time chart:
+
+<img src="https://raw.githubusercontent.com/JiaWeiTeh/gpx_vis/main/media/speed_chart.png" alt="Speed over time for one ride" width="320">
+
+Prefer elevation? Colour the routes and chart by height instead:
+
+```python
+track.create_map("my_ride.html", color_by="elevation")
+```
 
 **Backgrounds.** Switch in the bottom-right corner between OpenStreetMap (default), Plain, Dark mode, Plain (hierarchical) and Topographic.
 
@@ -57,7 +65,7 @@ track.create_map("my_ride.html", lite=True, nlite=100)
 track.city_list
 ```
 
-**Raw data** for your own analysis: `track.t` (time, UTC), `track.y` (latitude, deg), `track.x` (longitude, deg), `track.z` (elevation, m), or everything at once as a `pandas.DataFrame` in `track.data`.
+**Raw data** for your own analysis: `track.t` (time, UTC), `track.y` (latitude, deg), `track.x` (longitude, deg), `track.z` (elevation, m), `track.speed` (km/h), or everything except speed as a `pandas.DataFrame` in `track.data`.
 
 ## Try the example
 
@@ -68,6 +76,8 @@ python example/example.py path/to/tracks out.html
 
 ## Notes
 
+- **How speed is computed.** GPS positions jitter by a few metres, so raw point-to-point speeds are noisy. Speed at each point is the distance covered divided by the time taken over a 30-second window centred on it. All times are shown in UTC.
+- **Your files need timestamps.** Exports of recorded activities have them. Planned routes usually do not.
 - **Progress messages** go through Python's `logging`. To see them, add `import logging; logging.basicConfig(level=logging.INFO)` before creating the map.
 - **CARTO backgrounds** (Plain, Dark mode, Plain (hierarchical)) officially require a free [CARTO API key](https://carto.com/basemaps/apikey/). Pass it with `track.create_map("my_ride.html", carto_api_key="...")` or set the `CARTO_API_KEY` environment variable. OpenStreetMap and Topographic need no key. The key is written into the HTML file.
 - **Privacy.** The HTML file contains every coordinate and timestamp of your tracks, and your browser fetches map tiles from OpenStreetMap, CARTO and OpenTopoMap while viewing it. Think twice before sharing a map that starts or ends at your home.

@@ -1,9 +1,13 @@
 """Tests for the gpx_vis Track class (run with ``pytest`` from the repo root)."""
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import gpxpy
+import gpxpy.gpx
 import numpy as np
 import pytest
+from vincenty import vincenty
 
 from gpx_vis import Track
 
@@ -192,3 +196,119 @@ class TestCityList:
         assert all(c.frequency > 0 for c in cities)
         assert sum(c.frequency for c in cities) == len(Track(SINGLE_FILE).x)
         assert cities == sorted(cities)
+
+
+# =============================================================================
+# Speed (physics) tests on synthetic tracks with known answers
+# =============================================================================
+
+def _write_gpx(path, tracks):
+    """Write a GPX file. tracks: list of (name, [(lat, lon, elevation, datetime), ...])."""
+    gpx = gpxpy.gpx.GPX()
+    for name, points in tracks:
+        trk = gpxpy.gpx.GPXTrack(name=name)
+        seg = gpxpy.gpx.GPXTrackSegment()
+        trk.segments.append(seg)
+        gpx.tracks.append(trk)
+        for lat, lon, ele, t in points:
+            seg.points.append(gpxpy.gpx.GPXTrackPoint(lat, lon, elevation=ele, time=t))
+    path.write_text(gpx.to_xml())
+    return str(path)
+
+
+T0 = datetime(2024, 6, 1, 8, 0, 0, tzinfo=timezone.utc)
+STEP_DEG = 0.0005  # along a meridian at 49 deg N: about 55.6 m per step
+
+
+def _straight_line(n, step_s, lat0=49.0, lon=8.0, t0=T0):
+    """n points going due north, one step every step_s seconds."""
+    return [(lat0 + i * STEP_DEG, lon, 100.0, t0 + timedelta(seconds=i * step_s)) for i in range(n)]
+
+
+def _expected_kmh(step_s, lat0=49.0, lon=8.0):
+    return vincenty((lat0, lon), (lat0 + STEP_DEG, lon)) / step_s * 3600
+
+
+class TestSpeed:
+    def test_constant_speed_is_recovered(self, tmp_path):
+        track = Track(_write_gpx(tmp_path / "c.gpx", [("c", _straight_line(200, 5))]))
+        expected = _expected_kmh(5)  # about 40 km/h
+        assert 39 < expected < 41
+        np.testing.assert_allclose(track.speed, expected, rtol=1e-3)
+
+    def test_speed_change_is_tracked(self, tmp_path):
+        slow = _straight_line(100, 20)               # about 10 km/h
+        t_switch = slow[-1][3]
+        lat_switch = slow[-1][0]
+        fast = [(lat_switch + (i + 1) * STEP_DEG, 8.0, 100.0, t_switch + timedelta(seconds=(i + 1) * 5))
+                for i in range(100)]                  # about 40 km/h
+        track = Track(_write_gpx(tmp_path / "s.gpx", [("s", slow + fast)]))
+        # away from the switch (further than half the smoothing window) speeds are exact
+        np.testing.assert_allclose(track.speed[:90], _expected_kmh(20), rtol=1e-3)
+        np.testing.assert_allclose(track.speed[110:], _expected_kmh(5), rtol=1e-3)
+
+    def test_stationary_is_zero(self, tmp_path):
+        pts = [(49.0, 8.0, 100.0, T0 + timedelta(seconds=i)) for i in range(50)]
+        track = Track(_write_gpx(tmp_path / "still.gpx", [("still", pts)]))
+        np.testing.assert_allclose(track.speed, 0.0, atol=1e-9)
+
+    def test_speed_does_not_leak_between_tracks(self, tmp_path):
+        a = ("a", _straight_line(60, 20))                                   # about 10 km/h
+        b = ("b", _straight_line(60, 5, lat0=52.0, t0=T0 + timedelta(days=1)))  # about 40 km/h, far away
+        track = Track(_write_gpx(tmp_path / "two.gpx", [a, b]))
+        np.testing.assert_allclose(track.speed[:60], _expected_kmh(20), rtol=1e-3)
+        np.testing.assert_allclose(track.speed[60:], _expected_kmh(5, lat0=52.0), rtol=1e-3)
+
+    def test_duplicate_timestamps_give_finite_speed(self, tmp_path):
+        pts = _straight_line(50, 5)
+        pts[20] = (pts[20][0], pts[20][1], pts[20][2], pts[19][3])  # same time as previous point
+        pts[21] = (pts[21][0], pts[21][1], pts[21][2], pts[19][3])
+        track = Track(_write_gpx(tmp_path / "dup.gpx", [("dup", pts)]))
+        assert np.isfinite(track.speed).all()
+        assert (track.speed >= 0).all()
+
+    def test_missing_timestamps_give_nan_and_map_raises(self, tmp_path):
+        pts = [(lat, lon, ele, None) for lat, lon, ele, _ in _straight_line(20, 5)]
+        track = Track(_write_gpx(tmp_path / "notime.gpx", [("notime", pts)]))
+        assert np.isnan(track.speed).all()
+        with pytest.raises(ValueError, match="timestamp"):
+            track.create_map(tmp_path / "notime.html")
+
+    def test_mean_speed_matches_distance_over_time(self):
+        # on real data the time-weighted mean of the smoothed speed should agree
+        # with total distance / total time (the popup's "Average speed")
+        track = Track(os.path.join(DATA_DIR, 'cyclingBoston.gpx'))
+        seconds = np.array([(t - track.t[0]).total_seconds() for t in track.t])
+        weighted_mean = np.sum(track.speed[1:] * np.diff(seconds)) / seconds[-1]
+        overall = track._step_km.sum() / (seconds[-1] / 3600)
+        assert abs(weighted_mean - overall) / overall < 0.02
+
+    def test_example_walk_is_walking_pace(self):
+        # parkwalk.gpx was timed by gpx.studio at a constant 5 km/h
+        speed = Track(SINGLE_FILE).speed
+        assert 4.9 < np.median(speed) < 5.1
+
+
+class TestColorBy:
+    @pytest.fixture
+    def track(self):
+        return Track(SINGLE_FILE)
+
+    def test_speed_is_default_with_legend_and_utc_axis(self, track, tmp_path):
+        html = (tmp_path / "m.html")
+        track.create_map(html)
+        text = html.read_text()
+        assert "Speed (km/h)" in text      # legend caption and chart axis
+        assert "Average speed" in text     # popup subtitle
+        assert "Time (UTC)" in text
+
+    def test_elevation_option(self, track, tmp_path):
+        html = (tmp_path / "e.html")
+        track.create_map(html, color_by="elevation")
+        text = html.read_text()
+        assert "Elevation (m)" in text
+        assert "Speed (km/h)" not in text
+
+    def test_invalid_color_by(self, track, tmp_path):
+        with pytest.raises(ValueError):
+            track.create_map(tmp_path / "x.html", color_by="heart rate")
