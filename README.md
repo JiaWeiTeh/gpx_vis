@@ -1,1 +1,77 @@
-### About `gpx_vis`Transforms your .GPX files into an <a href="https://raw.githack.com/JiaWeiTeh/gpx_vis/main/example/map.html" target="_blank">(interactive map)</a>, whether you're conquering mountain trails or cruising city streets.Whether you're using apps like <a href="https://www.komoot.com/" target="_blank">Komoot</a> and <a href="https://www.strava.com/" target="_blank">Strava</a>, or crafting tracks on platforms like <a href="https://gpx.studio/" target="_blank">gpx.studio</a> - just make sure your  file includes data for `latitude`, `longitude`, `elevation`, and `time`, and you're good to go!Important note: `gpx_vis` is still in its development phase, so expect more exciting features and enhancements down the trail. But in the meantime, buckle up and get ready to explore your adventures! :climbing::bicyclist:### Contents[Installation](#Install)<br>[How to use](#Instantiate)<br>* [Map creation](#Map-creation)* [City overview](#City-overview)* [Additional information](#Additional-information)## InstallInstalling `gpx_vis` is straightforward through <a href="https://pypi.org/project/gpx-vis/" target="_blank">PyPI</a>:```bashpip install gpx_vis```To update to the latest version (if applicable):```bashpip install gpx_vis --upgrade```## Instantiate```pythonfrom gpx_vis import Tracktrack = Track(pathname)````pathname` serves as a reference to either a single `.gpx` file or a directory.If a directory path is provided, all .gpx files contained within that directorywill be merged, but retain their original metadata (e.g., different tracks remain separated).This allows users to overlay multiple tracks onto a single map, providing a comprehensive summary of the data being analyzed.## Map creation```pythontrack.create_map(filename)```* This generates an HTML file saved under `filename`, which contains an interactive map <a href="https://raw.githack.com/JiaWeiTeh/gpx_vis/main/example/map.html" target="_blank">(example)</a>.* Each segment of a track corresponds to the elevation relative to user's position: blue = lower elevation, yellow = higher elevation. * Users can hover over routes or click on final waypoints (flags) for additional information:![](https://raw.githubusercontent.com/JiaWeiTeh/gpx_vis/main/media/track_info.png)Different backgrounds are available (selectable at lower-right corner):|Tile type             |  Example  ||----------------------|-----------||Dark |  ![](https://raw.githubusercontent.com/JiaWeiTeh/gpx_vis/main/media/ex_dark.png) ||Street view | ![](https://raw.githubusercontent.com/JiaWeiTeh/gpx_vis/main/media/ex_openstreet.png) ||Plain |  ![](https://raw.githubusercontent.com/JiaWeiTeh/gpx_vis/main/media/ex_plain.png) ||Plain (Heirarchical) |  ![](https://raw.githubusercontent.com/JiaWeiTeh/gpx_vis/main/media/ex_plainheir.png) |In cases where the map contains a large dataset and loading time is a concern (if onehas been very hardworking), users have the option to include `lite = True`. * By default, this option limits the number of data points displayed on each route to `nlite = 50`. This is adjustable using `nlite` argument:```pythontrack.create_map(filename, lite=True, nlite=100)```Note that the minimum value for `nlite` is `10`.## City overview```pythontrack.city_list```Interested in the cities you passed through on your journey? This command generates a listof cities - sorted by country and name - that were detected along the tour route. * The `frequency` parameter indicates how many times each city was encountered, providing a rough estimate of the time spent in each city.## Additional informationIf you wish to plot or inspect different values, these parameters are also accessible via:* `track.t`: time (UTC)<br>* `track.x`: longitude (deg) - x values on a graph would represent the latitude.<br> * `track.y`: latitude (deg)<br>* `track.z`: elevation (m)<br>For a more comprehensive and unprocessed dataset, you can use:`track.data`:  Returns all data in a `pandas.DataFrame` accessible format.## Dependencies(numpy) https://numpy.org/ <br>(pandas) https://pandas.pydata.org/ <br>(altair) https://altair-viz.github.io/ <br>(branca) https://pypi.org/project/branca/ <br>(gpxpy) https://github.com/tkrajina/gpxpy <br>(vincenty) https://pypi.org/project/vincenty/ <br>(folium) https://github.com/python-visualization/folium <br>(humanfriendly) https://pypi.org/project/humanfriendly/ <br>(reverse-geocode) https://pypi.org/project/reverse-geocode/ <br>
+# gpx_vis
+
+Turn your `.gpx` tracks into an interactive HTML map.
+
+Works with exports from [Komoot](https://www.komoot.com/), [Strava](https://www.strava.com/), [gpx.studio](https://gpx.studio/) or any GPS device, as long as the file has latitude, longitude, elevation and time.
+
+[**Live example**](https://raw.githack.com/JiaWeiTeh/gpx_vis/main/example/map.html) (five rides around Boston)
+
+![Click the flag at the end of a route for details and an elevation profile](https://raw.githubusercontent.com/JiaWeiTeh/gpx_vis/main/media/track_info.png)
+
+## Install
+
+```bash
+pip install gpx_vis
+```
+
+Requires Python 3.9 or newer. Dependencies (folium, gpxpy, pandas, ...) are installed automatically.
+
+From source:
+
+```bash
+git clone https://github.com/JiaWeiTeh/gpx_vis.git
+cd gpx_vis
+pip install .
+```
+
+## Quick start
+
+```python
+from gpx_vis import Track
+
+track = Track("my_ride.gpx")       # one .gpx file, or a folder of them
+track.create_map("my_ride.html")   # open this file in your browser
+```
+
+Give `Track` a folder and every `.gpx` file inside is drawn on the same map, each as its own route.
+
+## What you get
+
+**Interactive map.** Each route is coloured by elevation (purple = low, yellow = high). Hover a route to see its name; click the flag at its end for start/end time and place, distance, duration and an elevation profile.
+
+**Backgrounds.** Switch in the bottom-right corner between OpenStreetMap (default), Plain, Dark mode, Plain (hierarchical) and Topographic.
+
+| Dark mode | OpenStreetMap | Plain | Plain (hierarchical) |
+|---|---|---|---|
+| ![](https://raw.githubusercontent.com/JiaWeiTeh/gpx_vis/main/media/ex_dark.png) | ![](https://raw.githubusercontent.com/JiaWeiTeh/gpx_vis/main/media/ex_openstreet.png) | ![](https://raw.githubusercontent.com/JiaWeiTeh/gpx_vis/main/media/ex_plain.png) | ![](https://raw.githubusercontent.com/JiaWeiTeh/gpx_vis/main/media/ex_plainheir.png) |
+
+**Lite mode** for very large files. Each route is drawn with at most about `nlite` points (default 50, minimum 10):
+
+```python
+track.create_map("my_ride.html", lite=True, nlite=100)
+```
+
+**Cities you passed through**, sorted by country then name, with how many track points fell in each:
+
+```python
+track.city_list
+```
+
+**Raw data** for your own analysis: `track.t` (time, UTC), `track.y` (latitude, deg), `track.x` (longitude, deg), `track.z` (elevation, m), or everything at once as a `pandas.DataFrame` in `track.data`.
+
+## Try the example
+
+```bash
+python example/example.py                        # example/data -> example/map.html
+python example/example.py path/to/tracks out.html
+```
+
+## Notes
+
+- **Progress messages** go through Python's `logging`. To see them, add `import logging; logging.basicConfig(level=logging.INFO)` before creating the map.
+- **CARTO backgrounds** (Plain, Dark mode, Plain (hierarchical)) officially require a free [CARTO API key](https://carto.com/basemaps/apikey/). Pass it with `track.create_map("my_ride.html", carto_api_key="...")` or set the `CARTO_API_KEY` environment variable. OpenStreetMap and Topographic need no key. The key is written into the HTML file.
+- **Privacy.** The HTML file contains every coordinate and timestamp of your tracks, and your browser fetches map tiles from OpenStreetMap, CARTO and OpenTopoMap while viewing it. Think twice before sharing a map that starts or ends at your home.
+
+## License
+
+[BSD 3-Clause](LICENSE).
