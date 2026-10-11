@@ -1,14 +1,16 @@
 """Core of gpx_vis: load ``.gpx`` tracks and draw them on an interactive map.
 
 A :class:`Track` reads one ``.gpx`` file or a folder of them, keeps the raw
-latitude / longitude / elevation / time arrays, and can write a self-contained
-HTML map (built with folium) with one route per track, coloured by speed
-(default) or elevation.
+latitude / longitude / elevation / time arrays, derives distance, speed, stops
+and moving time from them, and can write a self-contained HTML map (built with
+folium) with one route per track, coloured by speed (default) or elevation.
 """
 import logging
+import math
 import operator
 import os
-from collections import Counter
+from collections import Counter, defaultdict
+from datetime import timedelta
 
 import altair as alt
 import branca
@@ -31,11 +33,33 @@ logger = logging.getLogger(__name__)
 # (a few metres of position jitter per second is several km/h of fake speed).
 SPEED_WINDOW_S = 30.0
 
-# What create_map can colour the routes by -> label used for the legend and chart axis.
+# A stop = staying within STOP_RADIUS_M of one spot for at least STOP_MIN_S
+# seconds. GPS positions keep wandering while you stand still; inside a stop no
+# distance is added, speed is zero and the time does not count as moving time.
+STOP_RADIUS_M = 15.0
+STOP_MIN_S = 60.0
+
+_M_PER_DEG = 111_195.0  # metres per degree of latitude (mean Earth radius)
+
+# What create_map can colour the routes by -> label used for the legend.
 _COLOR_BY = {
     'speed': 'Speed (km/h)',
     'elevation': 'Elevation (m)',
 }
+
+# Popup chart colours (light popup surface): one hue per panel, ink for text.
+_SPEED_COLOR = '#2a78d6'
+_ELEVATION_COLOR = '#eb6834'
+_INK = '#0b0b0b'
+_INK_SECONDARY = '#52514e'
+_INK_MUTED = '#898781'
+_GRID = '#e1e0d9'
+_AXIS = '#c3c2b7'
+_CHART_WIDTH = 320
+_POPUP_SIZE = (400, 385)  # iframe width, height in px
+
+# Dark outline under each route so light colours stay visible on light maps.
+_CASING = dict(color='#1a1a19', weight=7, opacity=0.45)
 
 # Background layers offered in the layer control (bottom-right corner of the map).
 # CARTO basemaps officially require a free API key; see ``Track.create_map``.
@@ -44,6 +68,16 @@ _CARTO_LAYERS = [
     ('DarkMatter', 'Dark mode'),
     ('Voyager', 'Plain (hierarchical)'),
 ]
+
+
+def _fmt_duration(td):
+    """Compact duration: '45 s', '12 min', '3 h 05 min'."""
+    seconds = td.total_seconds()
+    if seconds < 60:
+        return f"{seconds:.0f} s"
+    minutes = int(round(seconds / 60))
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours} h {minutes:02d} min" if hours else f"{minutes} min"
 
 
 class Track:
@@ -71,6 +105,10 @@ class Track:
         self._t_list = []
         self._z_list = []
         self._name_list = []
+        self._track_list = []
+        self._segment_list = []
+        self._n_tracks = 0
+        self._n_segments = 0
         _timer = Timer()
         _timer.begin()
         logger.info('Reading data...')
@@ -104,16 +142,26 @@ class Track:
         self.z = np.array(self._z_list, dtype=float)
         self.t = np.array(self._t_list, dtype=object)
         self.name = np.array(self._name_list, dtype=object)
+        # which <trk> and which <trkseg> every point belongs to (unique across files)
+        self._track_id = np.array(self._track_list, dtype=int)
+        self._segment_id = np.array(self._segment_list, dtype=int)
         # free the temporary lists
-        del self._x_list, self._y_list, self._z_list, self._t_list, self._name_list
+        del (self._x_list, self._y_list, self._z_list, self._t_list, self._name_list,
+             self._track_list, self._segment_list)
         # warn about missing data
         if any(t is None for t in self.t):
             logger.warning(
                 "Some GPS points have no timestamp. "
                 "Speed, duration and create_map() need timestamps on every point."
             )
+        if np.isnan(self.z).any():
+            logger.warning(
+                "Some GPS points have no elevation; they are left out of elevation colours and charts."
+            )
         # caches for derived quantities
         self._data_cache = None
+        self._seconds_cache = None
+        self._stop_cache = None
         self._step_cache = None
         self._speed_cache = None
         _timer.end()
@@ -123,13 +171,19 @@ class Track:
         Going through gpx.tracks.segments.points and appending all values.
         """
         for trk in gpx.tracks:
+            track_id = self._n_tracks
+            self._n_tracks += 1
             for sgmt in trk.segments:
+                segment_id = self._n_segments
+                self._n_segments += 1
                 for pt in sgmt.points:
                     self._y_list.append(pt.latitude)
                     self._x_list.append(pt.longitude)
-                    self._z_list.append(pt.elevation if pt.elevation is not None else 0.0)
+                    self._z_list.append(pt.elevation if pt.elevation is not None else np.nan)
                     self._t_list.append(pt.time)
                     self._name_list.append(trk.name)
+                    self._track_list.append(track_id)
+                    self._segment_list.append(segment_id)
 
     @property
     def header(self):
@@ -153,6 +207,14 @@ class Track:
         self._data_cache = pd.DataFrame(data=data)
         return self._data_cache
 
+    def help(self):
+        """Print the project URL."""
+        logger.info('Check out https://github.com/JiaWeiTeh/gpx_vis .')
+
+    # =============================================================================
+    # Distance, stops, speed and moving time
+    # =============================================================================
+
     @property
     def speed(self) -> np.ndarray:
         """
@@ -160,55 +222,150 @@ class Track:
 
         GPS positions jitter by a few metres, so speed is smoothed: at each point
         it is the distance travelled divided by the time taken over a window of
-        SPEED_WINDOW_S seconds centred on that point (always including at least
-        one neighbour on each side). Computed separately for each track.
+        SPEED_WINDOW_S seconds centred on that point. Computed separately for each
+        GPS segment; zero inside stops.
         """
         if self._speed_cache is None:
             self._speed_cache = self._compute_speed()
         return self._speed_cache
 
     @property
+    def summary(self) -> pd.DataFrame:
+        """
+        One row per route: start/end time (UTC), distance, total duration,
+        moving time (stops and recording gaps left out), average speed over the
+        total and over the moving time, and top speed.
+        """
+        return pd.DataFrame([self._stats(start, end) for start, end in self.idx_trksplit()])
+
+    @property
+    def _seconds(self) -> np.ndarray:
+        """Unix time in seconds for every point (NaN where the timestamp is missing)."""
+        if self._seconds_cache is None:
+            times = pd.to_datetime(pd.Series(self.t, dtype=object), utc=True)
+            self._seconds_cache = (times - pd.Timestamp(0, tz='UTC')).dt.total_seconds().to_numpy()
+        return self._seconds_cache
+
+    @property
+    def _stopped(self) -> np.ndarray:
+        """
+        True for points inside a stop: a run of points that stays within
+        STOP_RADIUS_M of its first point for at least STOP_MIN_S seconds.
+        """
+        if self._stop_cache is None:
+            stopped = np.zeros(len(self.x), dtype=bool)
+            seconds = self._seconds
+            for start, end in self._segments():
+                t = seconds[start:end].tolist()
+                n = end - start
+                if n < 2 or np.isnan(t).any():
+                    continue
+                # flat local projection in metres: accurate at the 15 m scale
+                coslat = math.cos(math.radians(self.y[start]))
+                north = ((self.y[start:end] - self.y[start]) * _M_PER_DEG).tolist()
+                east = ((self.x[start:end] - self.x[start]) * _M_PER_DEG * coslat).tolist()
+                i = 0
+                while i < n - 1:
+                    j = i
+                    while j + 1 < n and math.hypot(east[j + 1] - east[i], north[j + 1] - north[i]) <= STOP_RADIUS_M:
+                        j += 1
+                    if j > i and t[j] - t[i] >= STOP_MIN_S:
+                        stopped[start + i:start + j + 1] = True
+                        i = j + 1
+                    else:
+                        i += 1
+            self._stop_cache = stopped
+        return self._stop_cache
+
+    @property
     def _step_km(self) -> np.ndarray:
-        """Distance in km from the previous point of the same track (0 at track starts)."""
+        """
+        Distance in km from the previous point. Zero at the start of every GPS
+        segment (gaps are not bridged) and between two points of a stop.
+        """
         if self._step_cache is None:
             steps = np.zeros(len(self.x))
-            for start_idx, end_idx in self.idx_trksplit():
-                for i in range(start_idx + 1, end_idx):
+            stopped = self._stopped
+            for start, end in self._segments():
+                for i in range(start + 1, end):
+                    if stopped[i] and stopped[i - 1]:
+                        continue
                     steps[i] = vincenty((self.y[i - 1], self.x[i - 1]), (self.y[i], self.x[i]))
             self._step_cache = steps
         return self._step_cache
 
-    def _seconds(self) -> np.ndarray:
-        """Unix time in seconds for every point (NaN where the timestamp is missing)."""
-        times = pd.to_datetime(pd.Series(self.t, dtype=object), utc=True)
-        return (times - pd.Timestamp(0, tz='UTC')).dt.total_seconds().to_numpy()
-
     def _compute_speed(self) -> np.ndarray:
-        seconds = self._seconds()
+        seconds = self._seconds
         steps = self._step_km
         speed = np.full(len(self.x), np.nan)
         half_window = SPEED_WINDOW_S / 2
-        for start_idx, end_idx in self.idx_trksplit():
-            t = seconds[start_idx:end_idx]
-            n = len(t)
-            if n < 2 or np.isnan(t).any():
+        for start, end in self._segments():
+            t = seconds[start:end]
+            if end - start < 2 or np.isnan(t).any():
                 continue
-            # guard against out-of-order timestamps so the search below is valid
+            # guard against out-of-order timestamps
             t = np.maximum.accumulate(t)
-            dist = np.cumsum(steps[start_idx:end_idx])  # km since track start
-            idx = np.arange(n)
-            lo = np.minimum(np.searchsorted(t, t - half_window, side='left'), np.maximum(idx - 1, 0))
-            hi = np.maximum(np.searchsorted(t, t + half_window, side='right') - 1, np.minimum(idx + 1, n - 1))
-            dt = t[hi] - t[lo]
-            with np.errstate(divide='ignore', invalid='ignore'):
-                v = np.where(dt > 0, (dist[hi] - dist[lo]) / dt * 3600.0, np.nan)
-            # windows with no time progress (duplicate timestamps): borrow from neighbours
-            speed[start_idx:end_idx] = pd.Series(v).interpolate(limit_direction='both').to_numpy()
+            if t[-1] <= t[0]:
+                continue
+            dist = np.cumsum(steps[start:end])  # km since segment start
+            # np.interp needs strictly increasing times: keep the last of any duplicates
+            keep = np.r_[t[1:] > t[:-1], True]
+            lo = np.clip(t - half_window, t[0], t[-1])
+            hi = np.clip(t + half_window, t[0], t[-1])
+            covered = np.interp(hi, t[keep], dist[keep]) - np.interp(lo, t[keep], dist[keep])
+            speed[start:end] = covered / (hi - lo) * 3600.0
+        # one-point segments: borrow from neighbours in the same track
+        for start, end in self.idx_trksplit():
+            v = speed[start:end]
+            if np.isnan(v).any() and np.isfinite(v).any():
+                speed[start:end] = pd.Series(v).interpolate(limit_direction='both').to_numpy()
         return speed
 
-    def help(self):
-        """Print the project URL."""
-        logger.info('Check out https://github.com/JiaWeiTeh/gpx_vis .')
+    def _time_weights(self) -> np.ndarray:
+        """Seconds each point stands for: half the gap to its neighbours in the same segment."""
+        weights = np.zeros(len(self.x))
+        seconds = self._seconds
+        for start, end in self._segments():
+            t = seconds[start:end]
+            if end - start < 2 or np.isnan(t).any():
+                continue
+            half = np.diff(t) / 2
+            weights[start:end - 1] += half
+            weights[start + 1:end] += half
+        return weights
+
+    def _stats(self, start, end) -> dict:
+        """Distance, duration, moving time and speeds of the points [start, end)."""
+        seconds = self._seconds[start:end]
+        distance_km = float(self._step_km[start + 1:end].sum())
+        stats = {
+            'name': self.name[start],
+            'start': self.t[start],
+            'end': self.t[end - 1],
+            'distance_km': distance_km,
+            'duration': None,
+            'moving_time': None,
+            'avg_speed_kmh': np.nan,
+            'moving_speed_kmh': np.nan,
+            'max_speed_kmh': np.nan,
+        }
+        if np.isnan(seconds).any():
+            return stats
+        # moving: time between consecutive points of one segment, unless both are in a stop
+        segment = self._segment_id[start:end]
+        stopped = self._stopped[start:end]
+        moving = (segment[1:] == segment[:-1]) & ~(stopped[1:] & stopped[:-1])
+        duration_s = float(seconds[-1] - seconds[0])
+        moving_s = float(np.diff(seconds)[moving].sum())
+        speed = self.speed[start:end]
+        stats.update(
+            duration=timedelta(seconds=round(duration_s)),
+            moving_time=timedelta(seconds=round(moving_s)),
+            avg_speed_kmh=distance_km / (duration_s / 3600) if duration_s > 0 else np.nan,
+            moving_speed_kmh=distance_km / (moving_s / 3600) if moving_s > 0 else np.nan,
+            max_speed_kmh=float(np.nanmax(speed)) if np.isfinite(speed).any() else np.nan,
+        )
+        return stats
 
     # =============================================================================
     # Here we deal with cities we have been in the tour.
@@ -220,14 +377,16 @@ class Track:
         >>> city.city = Neckargemünd
         >>> city.country = Germany
         >>> city.code = DE
-        >>> city.frequency = 204
+        >>> city.frequency = 204      # number of track points
+        >>> city.time = timedelta(minutes=17)  # time spent there
         """
 
         def __init__(self, city_data):
             self.city = city_data['city']
             self.country = city_data['country']
             self.code = city_data['country_code']
-            self.frequency = 0 #placeholder. Will be calculated.
+            self.frequency = 0  # placeholder. Will be calculated.
+            self.time = timedelta(0)  # placeholder. Will be calculated.
         # equivalency and hashing for set().
         def __eq__(self, other):
             if isinstance(other, self.__class__):
@@ -238,7 +397,8 @@ class Track:
             return hash((self.city, self.country, self.code))
         # to be unambiguous for info purposes. Return as string.
         def __repr__(self) -> str:
-            return f"{{country: {self.country}, city: {self.city}, frequency: {self.frequency}}}\n"
+            time = humanfriendly.format_timespan(self.time, max_units=2)
+            return f"{{country: {self.country}, city: {self.city}, frequency: {self.frequency}, time: {time}}}\n"
         # add tuple sorting system. We want to sort by country first, then by city.
         def __lt__(self, other):
             return (self.country, self.city) < (other.country, other.city)
@@ -246,17 +406,21 @@ class Track:
     @property
     def city_list(self) -> list:
         """
-        Obtain information of cities visited during the tour (including duplicates).
+        Cities passed through, sorted by country then name. Each has `frequency`
+        (number of track points there) and `time` (time spent there, which stays
+        right when the recording interval changes along the way).
         """
         # batch reverse geocode all coordinates at once (much faster than per-point)
-        all_coords = list(zip(self.y, self.x))
-        all_results = reverse_geocode.search(all_coords)
-        city_list = [self.City(result) for result in all_results]
-        # count frequencies in O(n) using Counter
-        city_counts = Counter(city_list)
+        all_results = reverse_geocode.search(list(zip(self.y, self.x)))
+        cities = [self.City(result) for result in all_results]
+        counts = Counter(cities)
+        seconds = defaultdict(float)
+        for city, weight in zip(cities, self._time_weights()):
+            seconds[city] += weight
         unique_city_list = []
-        for city, count in city_counts.items():
+        for city, count in counts.items():
             city.frequency = count
+            city.time = timedelta(seconds=round(seconds[city]))
             unique_city_list.append(city)
         # return full list of cities, sorted by country then by name
         logger.info('Here are the cities you passed through on your journey.')
@@ -266,42 +430,39 @@ class Track:
     # Track handling
     # =============================================================================
 
+    @staticmethod
+    def _runs(ids, start=0, end=None):
+        """[start, end) index pairs of runs of equal values in ids[start:end]."""
+        ids = ids[start:end]
+        if len(ids) == 0:
+            return []
+        cuts = np.flatnonzero(ids[1:] != ids[:-1]) + 1
+        bounds = np.r_[0, cuts, len(ids)] + start
+        return [[int(a), int(b)] for a, b in zip(bounds[:-1], bounds[1:])]
+
     def idx_trksplit(self):
         """
-        Index at which we enter a new track entry (if any).
-        Returns a list of [start, end) index pairs, one per track.
+        [start, end) index pairs, one per track: every <trk> of every file is its
+        own route, even when two of them share a name.
         """
-        idx_list = np.where(self.name[:-1] != self.name[1:])[0]
-        # we provide list of indices at which tracks separate.
-        track_list = []
-        # list is empty if there is only one track route.
-        if len(idx_list) == 0:
-            track_list.append([0, len(self.name)])
-            return track_list
-        else:
-            # record index from previous loop
-            previous_idx = 0
-            # corner case
-            if len(idx_list) == 1:
-                idx = idx_list[0]
-                track_list.append([0, idx+1])
-                track_list.append([idx+1, len(self.name)])
-            else:
-                for ii, idx in enumerate(idx_list):
-                    # start value
-                    if ii == 0:
-                        track_list.append([0, idx+1])
-                        previous_idx = idx + 1
-                    # end value
-                    elif ii == (len(idx_list) - 1):
-                        # account for both cases in the last loop
-                        track_list.append([previous_idx, idx + 1])
-                        track_list.append([idx + 1, len(self.name)])
-                    # in-between values
-                    else:
-                        track_list.append([previous_idx, idx + 1])
-                        previous_idx = idx + 1
-            return track_list
+        return self._runs(self._track_id)
+
+    def _segments(self, start=0, end=None):
+        """[start, end) index pairs, one per GPS segment (<trkseg>)."""
+        return self._runs(self._segment_id, start, end)
+
+    def _sample(self, start, end, max_points, keep_segment_ends=True):
+        """
+        Indices of about `max_points` evenly spaced points of [start, end), always
+        including the first and last point (and each segment's ends).
+        """
+        if end - start <= max_points:
+            return np.arange(start, end)
+        idx = np.round(np.linspace(start, end - 1, max_points)).astype(int)
+        if keep_segment_ends:
+            ends = [i for a, b in self._segments(start, end) for i in (a, b - 1)]
+            idx = np.r_[idx, ends]
+        return np.unique(idx)
 
     # =============================================================================
     # Plotting on maps
@@ -314,9 +475,9 @@ class Track:
         filename: output path (str or pathlib.Path); '.html' is appended if missing.
         lite: if True, draw at most about `nlite` points per track (faster for big files).
         nlite: point budget per track in lite mode (minimum 10).
-        color_by: 'speed' (default) or 'elevation'. Sets both the route colours
-            (one colour scale for the whole map, shown in a legend) and the
-            chart in each route's popup.
+        color_by: 'speed' (default) or 'elevation': what the route colours show
+            (one colour scale for the whole map, shown in a legend). Each route's
+            popup chart always shows speed and elevation.
         carto_api_key: key for the CARTO backgrounds (Plain, Dark mode,
             Plain (hierarchical)). Defaults to the CARTO_API_KEY environment
             variable. Without a key those layers may stay blank; the
@@ -363,11 +524,8 @@ class Track:
         values = self.speed if color_by == 'speed' else self.z
         colormap = self._colormap(values, _COLOR_BY[color_by])
         colormap.add_to(main_map)
-        # plot waypoints for each end and beginning of a track
-        idx_split_list = self.idx_trksplit()
-        # if list is empty, there is no splitting tracks
-        for selected_idx in idx_split_list:
-            self._add_tracks_on_map(line_group, selected_idx, lite, nlite, values, colormap, color_by)
+        for selected_idx in self.idx_trksplit():
+            self._add_tracks_on_map(line_group, selected_idx, lite, nlite, values, colormap)
 
         # clusters
         cluster = MarkerCluster().add_to(main_map)
@@ -385,7 +543,7 @@ class Track:
         folium.LayerControl(position='bottomright').add_to(main_map)
         # add minimap
         MiniMap(toggle_display = True, zoom_level_offset = -4,
-                width = 400, height = 200,
+                width = 200, height = 150,
                 position = 'topright',
                 ).add_to(main_map)
 
@@ -414,7 +572,7 @@ class Track:
         colormap.caption = caption
         return colormap
 
-    def _add_tracks_on_map(self, group, selected_idx, lite, nlite, values, colormap, color_by):
+    def _add_tracks_on_map(self, group, selected_idx, lite, nlite, values, colormap):
         """
         This function adds individual tracks onto create_map().
         group: FeatureGroup this track belongs to.
@@ -423,33 +581,33 @@ class Track:
         values, colormap: per-point quantity the route is coloured by, and its scale.
         """
         start_idx, end_idx = selected_idx
-        # calculate the actual index interval for desired points
-        if lite and (end_idx - start_idx) >= nlite:
-            n_points = int((end_idx - start_idx) / nlite)
-        else:
-            n_points = 1
-
-        track_coords = list(zip(self.y[start_idx:end_idx:n_points], self.x[start_idx:end_idx:n_points]))
-        popup_graph = self._add_popup_graph(selected_idx, color_by)
-        # create popup
-        popup = folium.Popup(min_width=400,
-                             max_width=400)
-        popup_graph.add_to(popup)
-        # add tooltip
+        idx = self._sample(start_idx, end_idx, nlite) if lite else np.arange(start_idx, end_idx)
+        # fill unknown values (e.g. missing elevation) from neighbours for colouring only
+        point_values = (pd.Series(values[idx]).interpolate(limit_direction='both')
+                        .fillna(colormap.vmin).to_numpy())
+        segment_of = self._segment_id[idx]
         tooltip = self._add_tooltip(selected_idx)
-        # colour each segment by the mean of its two end points
-        point_values = values[start_idx:end_idx:n_points]
-        point_values = np.where(np.isfinite(point_values), point_values, colormap.vmin)
-        segment_values = (point_values[:-1] + point_values[1:]) / 2
-        folium.ColorLine(track_coords,
-                        colors = segment_values,
-                        colormap = colormap,
-                        tooltip = tooltip,
-                        weight = 4,
-                        ).add_to(group)
 
-        # add start/finish points
-        folium.CircleMarker(location = track_coords[0],
+        # one line per GPS segment, so recording gaps are not bridged
+        lines = []
+        for segment in pd.unique(segment_of):
+            mask = segment_of == segment
+            coords = list(zip(self.y[idx][mask], self.x[idx][mask]))
+            if len(coords) < 2:
+                continue
+            seg_values = point_values[mask]
+            folium.PolyLine(coords, **_CASING).add_to(group)
+            # colour each piece by the mean of its two end points
+            folium.ColorLine(coords,
+                            colors = (seg_values[:-1] + seg_values[1:]) / 2,
+                            colormap = colormap,
+                            weight = 4,
+                            ).add_to(group)
+            lines.append(coords)
+
+        # start marker and finish flag at the true first and last point
+        popup = folium.Popup(self._add_popup_chart(selected_idx), max_width=_POPUP_SIZE[0] + 20)
+        folium.CircleMarker(location = (self.y[start_idx], self.x[start_idx]),
                             radius = 5,
                             fill = True,
                             color = 'black',
@@ -457,100 +615,146 @@ class Track:
                             fill_opacity = 1,
                             fill_color = 'yellow',
                             ).add_to(group)
-        folium.Marker(location = track_coords[-1],
+        folium.Marker(location = (self.y[end_idx - 1], self.x[end_idx - 1]),
                       icon=folium.Icon(color="green", icon="flag"),
                       popup = popup,
                       ).add_to(group)
-        # add highlight functionality
+        if not lines:
+            return
+
+        # wide transparent layer on top: hover highlight and tooltip
         def highlight_function(_feature):
             return {'color': '#8fe60e', 'opacity': .5, 'weight': 10}
 
-        highlight_line = {
-            'type': 'LineString',
-            # reverse coord from (lat, lon) into (lon, lat) for GeoJSON
-            'coordinates': [coord[::-1] for coord in track_coords]
-        }
-        # add transparent layer to help detect highlighting
+        def style_function(_feature):
+            return {'color': 'transparent', 'weight': 25}
+
+        # a full Feature with properties: folium's generated JS reads feature.properties.style
+        # and breaks the whole map when given a bare geometry
         folium.features.GeoJson(
-                color = 'transparent',
-                data = highlight_line,
+                data = {
+                    'type': 'Feature',
+                    'properties': {},
+                    'geometry': {
+                        'type': 'MultiLineString',
+                        # GeoJSON wants (lon, lat)
+                        'coordinates': [[[lon, lat] for lat, lon in line] for line in lines],
+                    },
+                },
                 control=False,
                 tooltip = tooltip,
-                weight = 25,
+                style_function=style_function,
                 highlight_function=highlight_function,
                 ).add_to(group)
 
     def _add_popup_txt(self, selected_idx):
         """
-        Creates str-block that contains useful info.
+        Title and summary lines for a route's popup.
         """
         start_idx, end_idx = selected_idx
-        track_name = self.name[start_idx]
-        track_y = self.y[start_idx:end_idx]
-        track_x = self.x[start_idx:end_idx]
-        track_t = self.t[start_idx:end_idx]
-        # get information
-        start_city = self.City(reverse_geocode.search([[track_y[0], track_x[0]]])[0]).city
-        end_city = self.City(reverse_geocode.search([[track_y[-1], track_x[-1]]])[0]).city
-        dist = round(float(self._step_km[start_idx + 1:end_idx].sum()), 3)
-        time_elapsed = self._get_time_elapsed(track_t[0], track_t[-1])
-        hours = (track_t[-1] - track_t[0]).total_seconds() / 3600
-        track_v = self.speed[start_idx:end_idx]
+        stats = self._stats(start_idx, end_idx)
+        start_city = self.City(reverse_geocode.search([(self.y[start_idx], self.x[start_idx])])[0]).city
+        end_city = self.City(reverse_geocode.search([(self.y[end_idx - 1], self.x[end_idx - 1])])[0]).city
 
-        title = f'{track_name}'
-        subtitle1 = f"""Start: {track_t[0].strftime('%d.%m.%Y %H:%M:%S')} (UTC), {start_city}"""
-        subtitle2 = f"""End: {track_t[-1].strftime('%d.%m.%Y %H:%M:%S')} (UTC), {end_city}"""
-        subtitle3 = f'Total: {dist} km, {time_elapsed}'
-        if hours > 0 and np.isfinite(track_v).any():
-            subtitle4 = f'Average speed: {dist / hours:.1f} km/h, max {np.nanmax(track_v):.1f} km/h'
+        t0, t1 = stats['start'], stats['end']
+        title = f"{stats['name']}"
+        if t0.date() == t1.date():
+            subtitle1 = f"{t0:%d.%m.%Y}, {t0:%H:%M} to {t1:%H:%M} UTC"
         else:
-            subtitle4 = 'Average speed: n/a'
-
+            subtitle1 = f"{t0:%d.%m.%Y %H:%M} to {t1:%d.%m.%Y %H:%M} UTC"
+        subtitle2 = f"{start_city} to {end_city}"
+        subtitle3 = (f"{stats['distance_km']:.2f} km in {_fmt_duration(stats['duration'])},"
+                     f" moving {_fmt_duration(stats['moving_time'])}")
+        if np.isfinite(stats['moving_speed_kmh']):
+            subtitle4 = (f"Moving average {stats['moving_speed_kmh']:.1f} km/h,"
+                         f" top speed {stats['max_speed_kmh']:.1f} km/h")
+        else:
+            subtitle4 = 'Speed: n/a'
         return title, subtitle1, subtitle2, subtitle3, subtitle4
 
-    def _add_popup_graph(self, selected_idx, color_by='speed'):
+    def _popup_chart(self, selected_idx) -> alt.TopLevelMixin:
         """
-        Creates the speed (or elevation) over time chart shown in the popup.
+        Speed over time, with elevation in a second panel below on the same time
+        axis (two panels rather than two y-axes on one plot, whose alignment would
+        be arbitrary). Hovering shows a crosshair and the values at that time.
         """
         start_idx, end_idx = selected_idx
-        # limit number of points
-        max_n_points = 100
-        if (end_idx - start_idx) < max_n_points:
-            n_points = 1
-        else:
-            n_points = int((end_idx - start_idx) / max_n_points)
-
-        # titles
+        idx = self._sample(start_idx, end_idx, 200, keep_segment_ends=False)
         title, *subtitles = self._add_popup_txt(selected_idx)
-        values = self.speed if color_by == 'speed' else self.z
         chart_data = pd.DataFrame({
-            'time': pd.to_datetime(pd.Series(self.t[start_idx:end_idx:n_points], dtype=object), utc=True),
-            'value': values[start_idx:end_idx:n_points],
-        }).dropna()
-        if color_by == 'speed':
-            # speed is a ratio scale: start the axis at zero
-            y_scale = alt.Scale(zero=True)
-        else:
-            y_scale = alt.Scale(domain=(chart_data['value'].min() - 50, chart_data['value'].max() + 50))
-        # plot
-        lineplot = (
-            alt.Chart(chart_data, title=alt.Title(title, subtitle=subtitles))
-            .mark_line()
-            .encode(
-                # timestamps are UTC; a 'utc' scale stops the browser shifting them
-                # into the viewer's own time zone
-                x=alt.X('time:T', axis=alt.Axis(tickCount=6, format='%H:%M'), scale=alt.Scale(type='utc'), title='Time (UTC)'),
-                y=alt.Y('value:Q', scale=y_scale, title=_COLOR_BY[color_by]),
+            'time': pd.to_datetime(pd.Series(self.t[idx], dtype=object), utc=True),
+            'speed': np.round(self.speed[idx], 1),
+            'elevation': np.round(self.z[idx]),
+            'distance': np.round(np.cumsum(self._step_km[start_idx:end_idx])[idx - start_idx], 2),
+        })
+        has_elevation = bool(np.isfinite(chart_data['elevation']).any())
+
+        hover = alt.selection_point(fields=['time'], nearest=True, on='pointerover',
+                                    clear='pointerout', empty=False)
+        tooltip = [
+            alt.Tooltip('utchoursminutesseconds(time):T', title='Time (UTC)'),
+            alt.Tooltip('speed:Q', title='Speed (km/h)', format='.1f'),
+            alt.Tooltip('distance:Q', title='Distance (km)', format='.2f'),
+        ]
+        if has_elevation:
+            tooltip.insert(2, alt.Tooltip('elevation:Q', title='Elevation (m)', format='.0f'))
+
+        def panel(field, label, color, height, scale, area, show_time_axis):
+            base = alt.Chart(chart_data).encode(
+                x=alt.X('time:T', scale=alt.Scale(type='utc'),
+                        axis=alt.Axis(format='%H:%M', tickCount=5, title='Time (UTC)')
+                        if show_time_axis else alt.Axis(labels=False, ticks=False, title=None)),
             )
-            .properties(width=300, height=300)
+            y = alt.Y(f'{field}:Q', title=label, scale=scale, axis=alt.Axis(tickCount=4))
+            if area:
+                # clip: the fill runs down to zero, which may sit below the panel
+                mark = base.mark_area(color=color, opacity=0.1, clip=True,
+                                      line={'color': color, 'strokeWidth': 2})
+            else:
+                mark = base.mark_line(color=color, strokeWidth=2, strokeJoin='round', strokeCap='round')
+            # crosshair: invisible rules at every point; the nearest one shows on hover
+            rule = base.mark_rule(color=_INK_MUTED, strokeWidth=1).encode(
+                opacity=alt.condition(hover, alt.value(1), alt.value(0)),
+                tooltip=tooltip,
+            ).add_params(hover)
+            dot = base.mark_point(filled=True, size=64, color=color, stroke='white', strokeWidth=2).encode(
+                y=y, opacity=alt.condition(hover, alt.value(1), alt.value(0)),
+            )
+            return alt.layer(mark.encode(y=y), rule, dot).properties(width=_CHART_WIDTH, height=height)
+
+        top_speed = float(np.nanmax(chart_data['speed'])) if np.isfinite(chart_data['speed']).any() else 1.0
+        speed_panel = panel('speed', 'Speed (km/h)', _SPEED_COLOR, 150 if has_elevation else 220,
+                            alt.Scale(domain=[0, max(1.0, top_speed * 1.1)], nice=True),
+                            area=False, show_time_axis=not has_elevation)
+        if has_elevation:
+            elevation = chart_data['elevation'].dropna()
+            pad = max(10.0, 0.1 * (elevation.max() - elevation.min()))
+            elevation_panel = panel('elevation', 'Elevation (m)', _ELEVATION_COLOR, 90,
+                                    alt.Scale(domain=[float(elevation.min() - pad), float(elevation.max() + pad)],
+                                              nice=False),
+                                    area=True, show_time_axis=True)
+            chart = alt.vconcat(speed_panel, elevation_panel, spacing=10)
+        else:
+            chart = speed_panel
+        return (
+            chart.properties(title=alt.Title(title, subtitle=subtitles, anchor='start', limit=_POPUP_SIZE[0] - 30))
+            .configure_axis(labelColor=_INK_MUTED, titleColor=_INK_SECONDARY, titleFontWeight='normal',
+                            gridColor=_GRID, domainColor=_AXIS, tickColor=_AXIS,
+                            labelFontSize=11, titleFontSize=11)
+            .configure_view(stroke=None)
+            .configure_title(color=_INK, subtitleColor=_INK_SECONDARY, fontSize=14, subtitleFontSize=11)
         )
 
-        # turn into vega
-        return folium.VegaLite(
-                            lineplot,
-                            width=300,
-                            height=300,
-                            )
+    def _add_popup_chart(self, selected_idx):
+        """
+        The popup chart as an iframe holding Altair's own HTML page, which loads
+        the Vega versions that match the installed Altair. (folium.VegaLite picks
+        script versions from a fixed list and loads Vega-Lite 2 for Altair 6
+        charts, which then fail to draw.)
+        """
+        html = self._popup_chart(selected_idx).to_html(embed_options={'actions': False})
+        html = html.replace('<head>', '<head><style>body { margin: 4px; font-family: system-ui, sans-serif; }</style>', 1)
+        return folium.IFrame(html, width=_POPUP_SIZE[0], height=_POPUP_SIZE[1])
 
     def _add_tooltip(self, selected_idx):
         """
