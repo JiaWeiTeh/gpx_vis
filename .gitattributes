@@ -1,0 +1,3 @@
+# Normalise line endings in the repository (the README once had CR-only endings)
+* text=auto
+*.png binary
